@@ -381,9 +381,9 @@ fun FullScreenCameraSegmentationScreen(
                         )
                         Text(
                             text = if (uiState.isScanning) {
-                                "MUSE SPARK // SCANNING OBJECTS…"
+                                "MUSE-SPARK-1.3 // SCANNING OBJECTS…"
                             } else {
-                                "META SAM // SEGMENTATION READY"
+                                "MUSE-SPARK-1.3 // META SAM READY"
                             },
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontFamily = JetBrainsMonoFontFamily,
@@ -875,7 +875,7 @@ fun FullScreenCameraSegmentationScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (uiState.isScanning) {
-                                "MUSE SPARK + META SAM SCANNING (${(uiState.scanProgress * 100).roundToInt()}%)…"
+                                "MUSE-SPARK-1.3 + META SAM (${(uiState.scanProgress * 100).roundToInt()}%)…"
                             } else {
                                 "Scan & Segment Objects"
                             },
@@ -1006,7 +1006,7 @@ fun SegmentationViewportCard(
                         text = if (uiState.isScanning) {
                             stringResource(R.string.ai_scanning_in_progress)
                         } else if (hasCameraPermission) {
-                            "META SAM // SEGMENTATION READY"
+                            "MUSE-SPARK-1.3 // META SAM READY"
                         } else {
                             stringResource(R.string.ai_segmentation_active)
                         },
@@ -1477,7 +1477,7 @@ fun SegmentationViewportCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (hasCameraPermission) "Muse Spark + Meta SAM Ready" else uiState.selectedRig.title,
+                        text = if (hasCameraPermission) "muse-spark-1.3 + Meta SAM Ready" else uiState.selectedRig.title,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = TextPrimary
                     )

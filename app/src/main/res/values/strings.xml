@@ -2,7 +2,7 @@
     <string name="app_name">Baggage Guard</string>
     <string name="brand_subtitle">ESCORT AI // VISION-SEGMENTATION &amp; MASS OPTIMIZER</string>
     <string name="ai_segmentation_active">AI Segmentation Active</string>
-    <string name="ai_scanning_in_progress">SAM 3.1 Multi-Agent Scan…</string>
+    <string name="ai_scanning_in_progress">muse-spark-1.3 + Meta SAM Scan…</string>
     <string name="scan_gear">Scan Gear</string>
     <string name="rescan_gear">Re-Scan Gear</string>
     <string name="manifest_title">DYNAMIC BAGGAGE MANIFEST</string>
@@ -15,7 +15,7 @@
     <string name="status_safe">OPTIMAL // WITHIN LIMIT</string>
     <string name="status_near_limit">CAUTION // APPROACHING LIMIT</string>
     <string name="status_overweight">BREACH // OVERWEIGHT DETECTED</string>
-    <string name="legend_ai_scanned">AI-Scanned (SAM 3.1)</string>
+    <string name="legend_ai_scanned">AI-Scanned (muse-spark-1.3)</string>
     <string name="legend_manual_entry">Manual Override</string>
     <string name="manual_entry_title">MANUAL ITEM ENTRY &amp; OVERRIDE</string>
     <string name="manual_entry_subtitle">Log un-scanned gear (e.g., packed boots, liquids, cables) with exact mass</string>

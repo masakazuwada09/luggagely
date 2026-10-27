@@ -44,8 +44,20 @@ val CyberBorderSubtle = LightBorderSubtle
 val CyberBorderBright = LimeChartreuseDark
 
 // Typography Colors (Dark Charcoal on Light Theme)
-val TextPrimary = Color(0xFF141619)
-val TextSecondary = Color(0xFF525866)
-val TextMuted = Color(0xFF7E8694)
+val TextPrimary = Color(0xFF1C1E21)
+val TextSecondary = Color(0xFF65676B)
+val TextMuted = Color(0xFF8A8D91)
 val TextOnDark = Color(0xFFF8FAFC)
 val TextOnLime = Color(0xFF141619)
+
+// Clean Simple White & Facebook-Style Dashboard Palette (No Yellow, No Dark Cards)
+val DashboardWhiteBg = Color(0xFFFFFFFF)
+val DashboardFeedGrayBg = Color(0xFFF0F2F5)
+val DashboardCardWhite = Color(0xFFFFFFFF)
+val DashboardSurfaceLight = Color(0xFFF7F8FA)
+val DashboardChipGray = Color(0xFFE4E6EB)
+val DashboardBorderLight = Color(0xFFDADDE1)
+val FacebookBlue = Color(0xFF1877F2)
+val FacebookBlueDark = Color(0xFF166FE5)
+val FacebookBlueSoftBg = Color(0xFFE7F3FF)
+

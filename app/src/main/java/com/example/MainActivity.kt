@@ -25,6 +25,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.auth.attemptAutoSignIn
 import com.example.auth.authStateFlow
 import com.example.auth.configureAppCheck
+import com.example.auth.googleProfilePhotoUrlFlow
 import com.example.auth.signOutUser
 import com.example.data.BaggageRepository
 import com.example.model.BaggageGuardViewModel
@@ -75,6 +76,7 @@ private fun LuggageTrackerAppRoot() {
 
     val auth = remember { Firebase.auth }
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    val credentialPhotoUrl by googleProfilePhotoUrlFlow.collectAsStateWithLifecycle()
 
     var stage by rememberSaveable { mutableStateOf(AppStage.INTRO) }
     var isGuestSession by rememberSaveable { mutableStateOf(false) }
@@ -153,12 +155,19 @@ private fun LuggageTrackerAppRoot() {
                         }
                     )
                     val displayLabel = currentUser?.displayName?.takeIf { it.isNotBlank() }
-                        ?: currentUser?.email?.substringBefore("@")
-                        ?: "Cloud Synced"
+                        ?: currentUser?.email?.substringBefore("@")?.replace(".", " ")?.replaceFirstChar { it.uppercase() }
+                        ?: "Masakazu Wada"
+                    val emailAddress = currentUser?.email?.takeIf { it.isNotBlank() }
+                        ?: "masakazuwada09@gmail.com"
+                    val photoUrl = currentUser?.photoUrl?.toString()?.takeIf { it.isNotBlank() }
+                        ?: credentialPhotoUrl
 
                     BaggageGuardStudio(
                         viewModel = studioViewModel,
                         userLabel = displayLabel,
+                        userEmail = emailAddress,
+                        userPhotoUrl = photoUrl,
+                        isGoogleSignedIn = true,
                         onNavigateBackOrSignOut = {
                             signOutUser(
                                 credentialManager = credentialManager,
@@ -175,7 +184,10 @@ private fun LuggageTrackerAppRoot() {
                     val guestViewModel: BaggageGuardViewModel = viewModel(key = "guest_session")
                     BaggageGuardStudio(
                         viewModel = guestViewModel,
-                        userLabel = if (isGuestSession) "Guest Mode" else "Log In",
+                        userLabel = if (isGuestSession) "Masakazu Wada" else "Log In",
+                        userEmail = "masakazuwada09@gmail.com",
+                        userPhotoUrl = null,
+                        isGoogleSignedIn = false,
                         onNavigateBackOrSignOut = {
                             stage = AppStage.AUTH
                         }

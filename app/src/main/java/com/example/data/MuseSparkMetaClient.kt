@@ -14,42 +14,45 @@ import java.net.URL
 
 private const val TAG = "MuseSparkMetaClient"
 private const val META_MODEL_API_URL = "https://api.meta.ai/v1/chat/completions"
-private const val MUSE_SPARK_MODEL_ID = "muse-spark-1.3"
 
 object MuseSparkMetaClient {
+
+    const val MUSE_SPARK_MODEL_ID = "muse-spark-1.3"
 
     fun isMetaApiKeyConfigured(): Boolean {
         val raw = runCatching { BuildConfig.META_API_KEY }.getOrNull().orEmpty().trim()
         return raw.isNotBlank() && raw != "YOUR_META_API_KEY" && raw != "null"
     }
 
-    private fun resolveBearerToken(): String {
+    private fun candidateBearerTokens(): List<String> {
         val raw = runCatching { BuildConfig.META_API_KEY }.getOrNull().orEmpty().trim()
+        if (raw.isBlank() || raw == "YOUR_META_API_KEY" || raw == "null") return emptyList()
         return if (raw.startsWith("APILLM_")) {
-            raw.removePrefix("API")
+            listOf(raw.removePrefix("API"), raw).distinct()
         } else {
-            raw
+            listOf(raw)
         }
     }
 
     suspend fun analyzeFrameWithMuseSpark(bitmap: Bitmap): String = withContext(Dispatchers.IO) {
-        val token = resolveBearerToken()
-        if (token.isBlank() || token == "YOUR_META_API_KEY") {
+        val tokens = candidateBearerTokens()
+        if (tokens.isEmpty()) {
             throw IllegalStateException("META_API_KEY is not configured in BuildConfig.")
         }
 
         val base64Jpeg = encodeBitmapToBase64Jpeg(bitmap)
-        val systemPrompt = """
-            You are the Meta SAM 3.1 + Muse Spark 1.3 real-time vision segmentation and gravimetric mass inference engine.
-            Analyze the camera image, segment all visible objects/gear/luggage/items, and return ONLY valid JSON with this exact structure:
+        val developerPrompt = """
+            You are the Meta SAM + Muse Spark ($MUSE_SPARK_MODEL_ID) real-time vision segmentation and gravimetric mass inference engine.
+            Analyze the camera image, segment all visible objects/gear/luggage/items, and return ONLY valid JSON with this exact structure (no markdown fences):
             {
-              "summary": "1-sentence summary of the segmented items identified by Muse Spark & Meta SAM",
+              "model": "$MUSE_SPARK_MODEL_ID",
+              "summary": "1-sentence summary of the segmented items identified by $MUSE_SPARK_MODEL_ID & Meta SAM",
               "items": [
                 {
                   "name": "Specific identified item name",
                   "weightKg": 1.25,
                   "category": "COMPUTE | POWER | APPAREL | LIQUIDS | ACCESSORY",
-                  "confidence": 0.97,
+                  "confidence": 0.98,
                   "left": 0.12,
                   "top": 0.18,
                   "width": 0.34,
@@ -59,15 +62,52 @@ object MuseSparkMetaClient {
             }
         """.trimIndent()
 
+        var lastError: Exception? = null
+        for (token in tokens) {
+            try {
+                val rawContent = executeChatCompletion(
+                    token = token,
+                    developerPrompt = developerPrompt,
+                    base64Jpeg = base64Jpeg,
+                    includeResponseFormat = true
+                )
+                return@withContext extractCleanJsonObject(rawContent)
+            } catch (firstErr: Exception) {
+                Log.w(TAG, "Muse Spark ($MUSE_SPARK_MODEL_ID) structured attempt warning: ${firstErr.message}")
+                try {
+                    val fallbackContent = executeChatCompletion(
+                        token = token,
+                        developerPrompt = developerPrompt,
+                        base64Jpeg = base64Jpeg,
+                        includeResponseFormat = false
+                    )
+                    return@withContext extractCleanJsonObject(fallbackContent)
+                } catch (secondErr: Exception) {
+                    lastError = secondErr
+                }
+            }
+        }
+
+        throw lastError ?: IllegalStateException("Muse Spark ($MUSE_SPARK_MODEL_ID) request failed")
+    }
+
+    private fun executeChatCompletion(
+        token: String,
+        developerPrompt: String,
+        base64Jpeg: String,
+        includeResponseFormat: Boolean
+    ): String {
         val payload = JSONObject().apply {
             put("model", MUSE_SPARK_MODEL_ID)
-            put("temperature", 0.2)
-            put("response_format", JSONObject().put("type", "json_object"))
+            put("reasoning_effort", "minimal")
+            if (includeResponseFormat) {
+                put("response_format", JSONObject().put("type", "json_object"))
+            }
             val messages = JSONArray()
             messages.put(
                 JSONObject().apply {
-                    put("role", "system")
-                    put("content", systemPrompt)
+                    put("role", "developer")
+                    put("content", developerPrompt)
                 }
             )
             messages.put(
@@ -79,7 +119,7 @@ object MuseSparkMetaClient {
                             put("type", "text")
                             put(
                                 "text",
-                                "Segment and identify all objects in this camera frame using Muse Spark and Meta SAM segmentation. Provide bounding boxes (left, top, width, height in 0.04..0.90) and estimated mass in kg."
+                                "Using model $MUSE_SPARK_MODEL_ID and Meta SAM segmentation, detect, segment, and identify all visible objects in this camera frame. Return JSON with summary and items (name, weightKg, category, confidence, left, top, width, height)."
                             )
                         }
                     )
@@ -101,7 +141,7 @@ object MuseSparkMetaClient {
         val connection = (URL(META_MODEL_API_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000
-            readTimeout = 35_000
+            readTimeout = 40_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Authorization", "Bearer $token")
@@ -117,8 +157,8 @@ object MuseSparkMetaClient {
                 connection.inputStream.bufferedReader().use { it.readText() }
             } else {
                 val err = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                Log.w(TAG, "Muse Spark Meta API returned HTTP $status: $err")
-                throw IllegalStateException("Muse Spark Meta API HTTP $status")
+                Log.w(TAG, "Muse Spark ($MUSE_SPARK_MODEL_ID) HTTP $status: $err")
+                throw IllegalStateException("Muse Spark ($MUSE_SPARK_MODEL_ID) HTTP $status")
             }
 
             val responseJson = JSONObject(body)
@@ -127,12 +167,165 @@ object MuseSparkMetaClient {
             val message = firstChoice?.optJSONObject("message")
             val content = message?.optString("content").orEmpty().trim()
             if (content.isBlank()) {
-                throw IllegalStateException("Empty content from Muse Spark Meta API")
+                throw IllegalStateException("Empty content from $MUSE_SPARK_MODEL_ID")
             }
-            content
+            return content
         } finally {
             connection.disconnect()
         }
+    }
+
+    suspend fun analyzeAirlineBookingWithMuse(
+        carrierName: String,
+        iataCode: String,
+        bookingCode: String,
+        passengerName: String,
+        passengerEmail: String,
+        packedWeightKg: Double,
+        packedItemNames: List<String>
+    ): String = withContext(Dispatchers.IO) {
+        val tokens = candidateBearerTokens()
+        if (tokens.isEmpty()) {
+            throw IllegalStateException("META_API_KEY is not configured in BuildConfig.")
+        }
+
+        val itemsDescription = if (packedItemNames.isEmpty()) {
+            "Empty manifest (0.0 kg currently packed)"
+        } else {
+            packedItemNames.joinToString(", ")
+        }
+
+        val developerPrompt = """
+            You are the Muse Spark ($MUSE_SPARK_MODEL_ID) Airline Booking & Baggage Inclusion Intelligence Engine.
+            Resolve and analyze the traveler's verified airline booking record for carrier "$carrierName ($iataCode)" matched to Passenger Name "$passengerName", Registered Email "$passengerEmail", and Booking Reference / PNR "$bookingCode".
+            Current packed luggage weight: $packedWeightKg kg ($itemsDescription).
+            Return ONLY valid JSON (no markdown fences) with this exact structure:
+            {
+              "model": "$MUSE_SPARK_MODEL_ID",
+              "flightNumber": "${iataCode} 567",
+              "route": "MNL (Manila) -> CEB / NRT / KIX",
+              "fareBundle": "Official airline fare tier name",
+              "eTicketNumber": "13-digit IATA e-ticket number",
+              "departureSchedule": "Departure date & time in local airport time",
+              "terminalGate": "Terminal and Boarding Gate details",
+              "seatNumber": "Assigned seat number and zone",
+              "cabinInclusionKg": 7.0,
+              "cabinInclusionDetails": "Exact cabin carry-on & personal item inclusion rule for $carrierName",
+              "checkedInclusionKg": 20.0,
+              "checkedInclusionDetails": "Exact checked baggage inclusion rule for $carrierName booking $bookingCode",
+              "headline": "Short status headline for $passengerName ($passengerEmail) comparing $packedWeightKg kg against $carrierName inclusions",
+              "summary": "2-sentence Muse Spark ($MUSE_SPARK_MODEL_ID) analysis of baggage inclusion and packing optimization for passenger $passengerName ($passengerEmail) on $carrierName booking $bookingCode",
+              "policyTips": [
+                "Specific $carrierName baggage rule tip 1",
+                "Specific $carrierName baggage rule tip 2",
+                "Specific $carrierName baggage rule tip 3"
+              ]
+            }
+        """.trimIndent()
+
+        val userPrompt = "Retrieve and analyze real airline booking details for passenger Name '$passengerName' and Email '$passengerEmail' (PNR $bookingCode) on $carrierName ($iataCode) vs current $packedWeightKg kg manifest ($itemsDescription) using $MUSE_SPARK_MODEL_ID."
+
+        var lastError: Exception? = null
+        for (token in tokens) {
+            try {
+                val rawContent = executeTextCompletion(
+                    token = token,
+                    developerPrompt = developerPrompt,
+                    userPrompt = userPrompt,
+                    includeResponseFormat = true
+                )
+                return@withContext extractCleanJsonObject(rawContent)
+            } catch (firstErr: Exception) {
+                try {
+                    val fallbackContent = executeTextCompletion(
+                        token = token,
+                        developerPrompt = developerPrompt,
+                        userPrompt = userPrompt,
+                        includeResponseFormat = false
+                    )
+                    return@withContext extractCleanJsonObject(fallbackContent)
+                } catch (secondErr: Exception) {
+                    lastError = secondErr
+                }
+            }
+        }
+
+        throw lastError ?: IllegalStateException("Muse Spark ($MUSE_SPARK_MODEL_ID) booking analysis failed")
+    }
+
+    private fun executeTextCompletion(
+        token: String,
+        developerPrompt: String,
+        userPrompt: String,
+        includeResponseFormat: Boolean
+    ): String {
+        val payload = JSONObject().apply {
+            put("model", MUSE_SPARK_MODEL_ID)
+            put("reasoning_effort", "minimal")
+            if (includeResponseFormat) {
+                put("response_format", JSONObject().put("type", "json_object"))
+            }
+            val messages = JSONArray()
+            messages.put(
+                JSONObject().apply {
+                    put("role", "developer")
+                    put("content", developerPrompt)
+                }
+            )
+            messages.put(
+                JSONObject().apply {
+                    put("role", "user")
+                    put("content", userPrompt)
+                }
+            )
+            put("messages", messages)
+        }
+
+        val connection = (URL(META_MODEL_API_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 25_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Authorization", "Bearer $token")
+        }
+
+        try {
+            connection.outputStream.use { os ->
+                os.write(payload.toString().toByteArray(Charsets.UTF_8))
+            }
+
+            val status = connection.responseCode
+            val body = if (status in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val err = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                Log.w(TAG, "Muse Spark ($MUSE_SPARK_MODEL_ID) Booking HTTP $status: $err")
+                throw IllegalStateException("Muse Spark ($MUSE_SPARK_MODEL_ID) HTTP $status")
+            }
+
+            val responseJson = JSONObject(body)
+            val choices = responseJson.optJSONArray("choices")
+            val firstChoice = choices?.optJSONObject(0)
+            val message = firstChoice?.optJSONObject("message")
+            val content = message?.optString("content").orEmpty().trim()
+            if (content.isBlank()) {
+                throw IllegalStateException("Empty content from $MUSE_SPARK_MODEL_ID")
+            }
+            return content
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun extractCleanJsonObject(raw: String): String {
+        val trimmed = raw.trim()
+        val startIdx = trimmed.indexOf('{')
+        val endIdx = trimmed.lastIndexOf('}')
+        if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+            return trimmed.substring(startIdx, endIdx + 1)
+        }
+        return trimmed
     }
 
     private fun encodeBitmapToBase64Jpeg(bitmap: Bitmap): String {

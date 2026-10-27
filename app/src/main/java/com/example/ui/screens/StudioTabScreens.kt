@@ -55,30 +55,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.SubcomposeAsyncImage
+import com.example.model.AirlineCarrier
 import com.example.model.AirlinePreset
+import com.example.ui.components.AirlineBookingProfileCard
 import com.example.model.BaggageGuardUiState
 import com.example.model.GearCategory
 import com.example.model.GearRigPreset
 import com.example.model.ItemSource
 import com.example.ui.theme.AmberManual
-import com.example.ui.theme.ContrastDarkCard
 import com.example.ui.theme.CrimsonAlert
+import com.example.ui.theme.DashboardBorderLight
+import com.example.ui.theme.DashboardCardWhite
+import com.example.ui.theme.DashboardChipGray
+import com.example.ui.theme.DashboardSurfaceLight
 import com.example.ui.theme.ElectricIndigo
 import com.example.ui.theme.EmeraldSafe
+import com.example.ui.theme.FacebookBlue
+import com.example.ui.theme.FacebookBlueSoftBg
 import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.LightBorderSubtle
-import com.example.ui.theme.LimeChartreuse
-import com.example.ui.theme.LimeChartreuseDark
-import com.example.ui.theme.PureWhiteCard
-import com.example.ui.theme.SoftGraySurface
-import com.example.ui.theme.SoftLimeTintBg
 import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextOnLime
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
@@ -94,8 +96,9 @@ fun QuickCameraScannerBanner(
             .fillMaxWidth()
             .testTag("dashboard_camera_shortcut_card")
             .clickable { onOpenCameraTab() },
-        color = ContrastDarkCard,
-        shape = RoundedCornerShape(22.dp)
+        color = DashboardCardWhite,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, DashboardBorderLight)
     ) {
         Row(
             modifier = Modifier
@@ -113,13 +116,13 @@ fun QuickCameraScannerBanner(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(LimeChartreuse),
+                        .background(FacebookBlueSoftBg),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.PhotoCamera,
                         contentDescription = null,
-                        tint = TextOnLime,
+                        tint = FacebookBlue,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -133,26 +136,26 @@ fun QuickCameraScannerBanner(
                             modifier = Modifier
                                 .size(7.dp)
                                 .clip(CircleShape)
-                                .background(LimeChartreuse)
+                                .background(FacebookBlue)
                         )
                         Text(
                             text = uiState.scanPhaseLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = LimeChartreuse,
+                            color = FacebookBlue,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "AI Camera Vision Scanner",
+                        text = "Muse Spark 1.3 + Meta SAM Scanner",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White
+                        color = TextPrimary
                     )
                     Text(
-                        text = "${uiState.activeItems.count { it.source == ItemSource.AI_SCANNED }} objects locked • ${BaggageGuardUiState.formatWeight(uiState.aiScannedWeightKg)} kg",
+                        text = "${uiState.activeItems.count { it.source == ItemSource.AI_SCANNED }} objects segmented • ${BaggageGuardUiState.formatWeight(uiState.aiScannedWeightKg)} kg",
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
-                        color = Color.White.copy(alpha = 0.72f)
+                        color = TextSecondary
                     )
                 }
             }
@@ -164,16 +167,19 @@ fun QuickCameraScannerBanner(
                 modifier = Modifier
                     .height(40.dp)
                     .testTag("open_camera_tab_button"),
-                shape = RoundedCornerShape(50),
+                shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = LimeChartreuse,
-                    contentColor = TextOnLime
+                    containerColor = FacebookBlue,
+                    contentColor = Color.White
                 ),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
             ) {
                 Text(
                     text = "Open Camera",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
                 )
             }
         }
@@ -223,9 +229,9 @@ fun LuggageBreakdownTabScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
-                    .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(24.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -238,7 +244,7 @@ fun LuggageBreakdownTabScreen(
                         Icon(
                             imageVector = Icons.Default.Luggage,
                             contentDescription = null,
-                            tint = TextPrimary,
+                            tint = FacebookBlue,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
@@ -255,11 +261,11 @@ fun LuggageBreakdownTabScreen(
                                 .fillMaxWidth()
                                 .testTag("luggage_rig_${rig.id}")
                                 .clickable { onSelectRig(rig) },
-                            color = if (isSelected) SoftLimeTintBg else SoftGraySurface,
-                            shape = RoundedCornerShape(16.dp),
+                            color = if (isSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
+                            shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(
-                                1.2.dp,
-                                if (isSelected) LimeChartreuseDark else LightBorderSubtle
+                                1.dp,
+                                if (isSelected) FacebookBlue else DashboardBorderLight
                             )
                         ) {
                             Row(
@@ -283,14 +289,14 @@ fun LuggageBreakdownTabScreen(
                                 }
 
                                 Surface(
-                                    color = if (isSelected) LimeChartreuse else PureWhiteCard,
+                                    color = if (isSelected) FacebookBlue else DashboardCardWhite,
                                     shape = RoundedCornerShape(50),
-                                    border = BorderStroke(1.dp, if (isSelected) LimeChartreuseDark else LightBorderSubtle)
+                                    border = BorderStroke(1.dp, if (isSelected) FacebookBlue else DashboardBorderLight)
                                 ) {
                                     Text(
                                         text = if (isSelected) "ACTIVE" else "LOAD",
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isSelected) TextOnLime else TextSecondary,
+                                        color = if (isSelected) Color.White else TextSecondary,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                                     )
                                 }
@@ -307,9 +313,9 @@ fun LuggageBreakdownTabScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
-                    .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(24.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -327,7 +333,7 @@ fun LuggageBreakdownTabScreen(
                             Icon(
                                 imageVector = Icons.Default.Scale,
                                 contentDescription = null,
-                                tint = TextPrimary,
+                                tint = FacebookBlue,
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
@@ -393,14 +399,14 @@ fun LuggageBreakdownTabScreen(
                                     .fillMaxWidth()
                                     .height(8.dp)
                                     .clip(RoundedCornerShape(50))
-                                    .background(SoftGraySurface)
+                                    .background(DashboardChipGray)
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth(animatedShare)
                                         .fillMaxHeight()
                                         .clip(RoundedCornerShape(50))
-                                        .background(if (catWeight > 0) LimeChartreuseDark else LightBorderSubtle)
+                                        .background(if (catWeight > 0) FacebookBlue else DashboardBorderLight)
                                 )
                             }
                         }
@@ -415,9 +421,9 @@ fun LuggageBreakdownTabScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
-                    .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(24.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -460,9 +466,9 @@ fun LuggageBreakdownTabScreen(
 
                     if (uiState.shiftedItems.isEmpty()) {
                         Surface(
-                            color = SoftGraySurface,
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, LightBorderSubtle)
+                            color = DashboardSurfaceLight,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, DashboardBorderLight)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -474,7 +480,7 @@ fun LuggageBreakdownTabScreen(
                                 Icon(
                                     imageVector = Icons.Default.CheckCircle,
                                     contentDescription = null,
-                                    tint = EmeraldSafe,
+                                    tint = FacebookBlue,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Text(
@@ -487,9 +493,9 @@ fun LuggageBreakdownTabScreen(
                     } else {
                         uiState.shiftedItems.forEach { item ->
                             Surface(
-                                color = SoftGraySurface,
+                                color = DashboardSurfaceLight,
                                 shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, LightBorderSubtle)
+                                border = BorderStroke(1.dp, DashboardBorderLight)
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -558,7 +564,7 @@ fun SettingsTabScreen(
                     color = TextPrimary
                 )
                 Text(
-                    text = "Configure SAM 3.1 vision overlays, gravimetric heatmaps, and default airline thresholds.",
+                    text = "Configure muse-spark-1.3 vision model, Meta SAM segmentation overlays, and default airline thresholds.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
@@ -571,9 +577,9 @@ fun SettingsTabScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
-                    .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(24.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -586,7 +592,7 @@ fun SettingsTabScreen(
                         Icon(
                             imageVector = Icons.Default.Tune,
                             contentDescription = null,
-                            tint = TextPrimary,
+                            tint = FacebookBlue,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
@@ -600,8 +606,8 @@ fun SettingsTabScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(SoftGraySurface)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(DashboardSurfaceLight)
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -614,12 +620,12 @@ fun SettingsTabScreen(
                             Icon(
                                 imageVector = Icons.Default.Layers,
                                 contentDescription = null,
-                                tint = TextPrimary,
+                                tint = FacebookBlue,
                                 modifier = Modifier.size(20.dp)
                             )
                             Column {
                                 Text(
-                                    text = "SAM 3.1 Bounding Boxes",
+                                    text = "Meta SAM Bounding Boxes",
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                                     color = TextPrimary
                                 )
@@ -635,8 +641,8 @@ fun SettingsTabScreen(
                             onCheckedChange = { onToggleBoundingBoxes() },
                             modifier = Modifier.testTag("settings_toggle_boxes"),
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextOnLime,
-                                checkedTrackColor = LimeChartreuse
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = FacebookBlue
                             )
                         )
                     }
@@ -645,8 +651,8 @@ fun SettingsTabScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(SoftGraySurface)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(DashboardSurfaceLight)
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -659,7 +665,7 @@ fun SettingsTabScreen(
                             Icon(
                                 imageVector = Icons.Default.GridOn,
                                 contentDescription = null,
-                                tint = TextPrimary,
+                                tint = FacebookBlue,
                                 modifier = Modifier.size(20.dp)
                             )
                             Column {
@@ -680,8 +686,8 @@ fun SettingsTabScreen(
                             onCheckedChange = { onToggleHeatmap() },
                             modifier = Modifier.testTag("settings_toggle_heatmap"),
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextOnLime,
-                                checkedTrackColor = LimeChartreuse
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = FacebookBlue
                             )
                         )
                     }
@@ -690,12 +696,12 @@ fun SettingsTabScreen(
                         onClick = onRunScanInCamera,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp)
+                            .height(48.dp)
                             .testTag("settings_launch_camera_scan"),
-                        shape = RoundedCornerShape(50),
+                        shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = LimeChartreuse,
-                            contentColor = TextOnLime
+                            containerColor = FacebookBlue,
+                            contentColor = Color.White
                         )
                     ) {
                         Icon(
@@ -706,7 +712,10 @@ fun SettingsTabScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Launch Camera & Run Multi-Agent Scan",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
                         )
                     }
                 }
@@ -719,9 +728,9 @@ fun SettingsTabScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
-                    .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(24.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -734,7 +743,7 @@ fun SettingsTabScreen(
                         Icon(
                             imageVector = Icons.Default.FlightTakeoff,
                             contentDescription = null,
-                            tint = TextPrimary,
+                            tint = FacebookBlue,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
@@ -750,11 +759,11 @@ fun SettingsTabScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onSelectPreset(preset) },
-                            color = if (isSelected) SoftLimeTintBg else SoftGraySurface,
-                            shape = RoundedCornerShape(16.dp),
+                            color = if (isSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
+                            shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(
-                                1.2.dp,
-                                if (isSelected) LimeChartreuseDark else LightBorderSubtle
+                                1.dp,
+                                if (isSelected) FacebookBlue else DashboardBorderLight
                             )
                         ) {
                             Row(
@@ -782,10 +791,95 @@ fun SettingsTabScreen(
                                         fontFamily = JetBrainsMonoFontFamily,
                                         fontWeight = FontWeight.Bold
                                     ),
-                                    color = if (isSelected) TextPrimary else TextSecondary
+                                    color = if (isSelected) FacebookBlue else TextSecondary
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // React Native + iOS App Store Ready Structure Card
+        item(key = "react_native_ios_structure_card") {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 640.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "REACT NATIVE & iOS APP STORE READY",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = TextPrimary
+                        )
+                        Surface(
+                            color = FacebookBlueSoftBg,
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Text(
+                                text = "iOS + ANDROID",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = FacebookBlue,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Cross-platform React Native (Expo + iOS CocoaPods) structure is configured in the project root for direct Apple App Store publishing:",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                        color = TextSecondary
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(DashboardSurfaceLight)
+                            .border(1.dp, DashboardBorderLight, RoundedCornerShape(12.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "• App.tsx & src/screens/DashboardScreen.tsx",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "• src/components/SegmentationCameraModal.tsx (expo-camera + Meta SAM)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "• src/services/museSparkMetaClient.ts (muse-spark-1.3)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "• app.json, eas.json, ios/Podfile & ios/BaggageGuard/Info.plist",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "• Build & Publish: eas build --platform ios && eas submit --platform ios",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = FacebookBlue
+                        )
                     }
                 }
             }
@@ -797,10 +891,17 @@ fun SettingsTabScreen(
 fun ProfileTabScreen(
     uiState: BaggageGuardUiState,
     userLabel: String?,
+    userEmail: String? = null,
+    userPhotoUrl: String? = null,
+    onBookingCodeChange: (String) -> Unit = {},
+    onConnectAndAnalyzeBooking: (String?, String?) -> Unit = { _, _ -> },
+    onApplyAllowanceMode: (Boolean) -> Unit = {},
     onNavigateBackOrSignOut: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     val isGuest = userLabel == null || userLabel.contains("Guest", ignoreCase = true) || userLabel.equals("Log In", ignoreCase = true)
+    val resolvedName = userLabel?.takeIf { !isGuest && it.isNotBlank() } ?: uiState.connectedBooking.passengerName
+    val resolvedEmail = userEmail?.takeIf { it.isNotBlank() } ?: uiState.connectedBooking.passengerEmail
     val aiCount = uiState.activeItems.count { it.source == ItemSource.AI_SCANNED }
     val manualCount = uiState.activeItems.count { it.source == ItemSource.MANUAL_ENTRY }
 
@@ -825,21 +926,22 @@ fun ProfileTabScreen(
                     color = TextPrimary
                 )
                 Text(
-                    text = "Account identity, cloud manifest sync status, and baggage telemetry.",
+                    text = "Account identity, verified airline booking, and baggage telemetry.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
             }
         }
 
-        // Traveler Identity Hero Card
+        // Traveler Identity Hero Card (Simple White Card)
         item(key = "profile_identity_card") {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 640.dp),
-                color = ContrastDarkCard,
-                shape = RoundedCornerShape(24.dp)
+                    .widthIn(max = 640.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(20.dp),
@@ -851,27 +953,62 @@ fun ProfileTabScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(60.dp)
+                                .size(64.dp)
                                 .clip(CircleShape)
-                                .background(LimeChartreuse),
+                                .background(FacebookBlueSoftBg)
+                                .border(2.dp, FacebookBlue, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = null,
-                                tint = TextOnLime,
-                                modifier = Modifier.size(32.dp)
-                            )
+                            if (!userPhotoUrl.isNullOrBlank()) {
+                                SubcomposeAsyncImage(
+                                    model = userPhotoUrl,
+                                    contentDescription = resolvedName,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape),
+                                    loading = {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = null,
+                                            tint = FacebookBlue,
+                                            modifier = Modifier.size(34.dp)
+                                        )
+                                    },
+                                    error = {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = null,
+                                            tint = FacebookBlue,
+                                            modifier = Modifier.size(34.dp)
+                                        )
+                                    }
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = FacebookBlue,
+                                    modifier = Modifier.size(34.dp)
+                                )
+                            }
                         }
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = userLabel ?: "Global Nomad Traveler",
+                                text = resolvedName,
                                 style = MaterialTheme.typography.headlineMedium.copy(
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold
                                 ),
-                                color = Color.White
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = resolvedEmail,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    color = TextSecondary
+                                )
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
@@ -881,21 +1018,22 @@ fun ProfileTabScreen(
                                 Icon(
                                     imageVector = if (isGuest) Icons.Default.VerifiedUser else Icons.Default.CloudDone,
                                     contentDescription = null,
-                                    tint = LimeChartreuse,
+                                    tint = FacebookBlue,
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Text(
                                     text = if (isGuest) "LOCAL GUEST SESSION" else "FIREBASE CLOUD SYNC ACTIVE",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = LimeChartreuse
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = FacebookBlue
                                 )
                             }
                         }
                     }
 
                     Surface(
-                        color = Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(16.dp)
+                        color = DashboardSurfaceLight,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, DashboardBorderLight)
                     ) {
                         Row(
                             modifier = Modifier
@@ -907,17 +1045,29 @@ fun ProfileTabScreen(
                             Text(
                                 text = "Active Loadout Preset",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.72f)
+                                color = TextSecondary
                             )
                             Text(
                                 text = "${uiState.selectedRig.title} (${uiState.selectedPreset.shortLabel})",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = LimeChartreuse
+                                color = FacebookBlue
                             )
                         }
                     }
                 }
             }
+        }
+
+        // Verified Airline Booking Details Card (Matched by Name & Email + Muse Spark 1.3)
+        item(key = "profile_airline_booking_inclusion_card") {
+            AirlineBookingProfileCard(
+                uiState = uiState,
+                passengerName = resolvedName,
+                passengerEmail = resolvedEmail,
+                onBookingCodeChange = onBookingCodeChange,
+                onConnectAndAnalyzeBooking = onConnectAndAnalyzeBooking,
+                onApplyAllowanceMode = onApplyAllowanceMode
+            )
         }
 
         // Telemetry Metrics Grid
@@ -926,9 +1076,9 @@ fun ProfileTabScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
-                    .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(24.dp)
+                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -948,7 +1098,7 @@ fun ProfileTabScreen(
                             label = "Total Packed Mass",
                             value = "${BaggageGuardUiState.formatWeight(uiState.totalWeightKg)} kg",
                             sublabel = "Limit: ${BaggageGuardUiState.formatWeight(uiState.limitKg)} kg",
-                            accentColor = if (uiState.isOverweight) CrimsonAlert else EmeraldSafe,
+                            accentColor = if (uiState.isOverweight) CrimsonAlert else FacebookBlue,
                             modifier = Modifier.weight(1f)
                         )
                         ProfileStatTile(
@@ -991,12 +1141,12 @@ fun ProfileTabScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .widthIn(max = 640.dp)
-                        .height(54.dp)
+                        .height(50.dp)
                         .testTag("profile_sign_out_button"),
-                    shape = RoundedCornerShape(50),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = LimeChartreuse,
-                        contentColor = TextOnLime
+                        containerColor = FacebookBlue,
+                        contentColor = Color.White
                     )
                 ) {
                     Icon(
@@ -1007,7 +1157,10 @@ fun ProfileTabScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (isGuest) "Sign In / Create Cloud Account" else "Switch Account / Sign Out",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
                     )
                 }
             }
@@ -1025,9 +1178,9 @@ private fun ProfileStatTile(
 ) {
     Surface(
         modifier = modifier,
-        color = SoftGraySurface,
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, LightBorderSubtle)
+        color = DashboardSurfaceLight,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, DashboardBorderLight)
     ) {
         Column(
             modifier = Modifier.padding(14.dp),

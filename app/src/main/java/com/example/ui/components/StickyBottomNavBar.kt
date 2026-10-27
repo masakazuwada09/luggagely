@@ -57,15 +57,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.ContrastDarkCard
+import com.example.ui.theme.DashboardBorderLight
+import com.example.ui.theme.DashboardCardWhite
 import com.example.ui.theme.EmeraldSafe
-import com.example.ui.theme.LightBorderSubtle
-import com.example.ui.theme.LimeChartreuse
-import com.example.ui.theme.LimeChartreuseDark
+import com.example.ui.theme.FacebookBlue
+import com.example.ui.theme.FacebookBlueDark
+import com.example.ui.theme.FacebookBlueSoftBg
 import com.example.ui.theme.PureWhiteCard
-import com.example.ui.theme.SoftLimeTintBg
 import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextOnLime
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
@@ -135,13 +134,13 @@ fun StickyBottomNavBar(
             .testTag("sticky_bottom_nav_bar"),
         contentAlignment = Alignment.BottomCenter
     ) {
-        // Main Bottom Navigation Surface
+        // Main Bottom Navigation Surface (Simple Clean White)
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = PureWhiteCard,
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-            shadowElevation = 16.dp,
-            border = BorderStroke(1.dp, LightBorderSubtle)
+            color = DashboardCardWhite,
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, DashboardBorderLight)
         ) {
             Row(
                 modifier = Modifier
@@ -185,12 +184,12 @@ private fun StandardNavTabItem(
     modifier: Modifier = Modifier
 ) {
     val iconTint by animateColorAsState(
-        targetValue = if (isSelected) TextPrimary else TextMuted,
+        targetValue = if (isSelected) FacebookBlue else TextSecondary,
         animationSpec = tween(220),
         label = "nav_icon_tint_${tab.id}"
     )
     val pillBg by animateColorAsState(
-        targetValue = if (isSelected) SoftLimeTintBg else Color.Transparent,
+        targetValue = if (isSelected) FacebookBlueSoftBg else Color.Transparent,
         animationSpec = tween(220),
         label = "nav_pill_bg_${tab.id}"
     )
@@ -209,13 +208,6 @@ private fun StandardNavTabItem(
             modifier = Modifier
                 .clip(RoundedCornerShape(50))
                 .background(pillBg)
-                .then(
-                    if (isSelected) {
-                        Modifier.border(1.dp, LimeChartreuseDark.copy(alpha = 0.6f), RoundedCornerShape(50))
-                    } else {
-                        Modifier
-                    }
-                )
                 .padding(horizontal = 14.dp, vertical = 5.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -245,7 +237,7 @@ private fun StandardNavTabItem(
                 fontSize = 11.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
             ),
-            color = if (isSelected) TextPrimary else TextSecondary
+            color = if (isSelected) FacebookBlue else TextSecondary
         )
     }
 }
@@ -265,14 +257,9 @@ private fun CenterCameraNavButton(
         label = "center_camera_scale"
     )
     val containerColor by animateColorAsState(
-        targetValue = if (isSelected) LimeChartreuse else ContrastDarkCard,
+        targetValue = if (isSelected) FacebookBlueDark else FacebookBlue,
         animationSpec = tween(250),
         label = "center_camera_bg"
-    )
-    val iconColor by animateColorAsState(
-        targetValue = if (isSelected) TextOnLime else LimeChartreuse,
-        animationSpec = tween(250),
-        label = "center_camera_icon"
     )
 
     Column(
@@ -288,25 +275,24 @@ private fun CenterCameraNavButton(
     ) {
         Box(
             modifier = Modifier
-                .offset(y = (-10).dp)
+                .offset(y = (-8).dp)
                 .scale(buttonScale * pulseScale),
             contentAlignment = Alignment.Center
         ) {
-            // Outer halo ring
             Box(
                 modifier = Modifier
-                    .size(60.dp)
+                    .size(56.dp)
                     .shadow(
-                        elevation = if (isSelected) 12.dp else 6.dp,
+                        elevation = if (isSelected) 10.dp else 4.dp,
                         shape = CircleShape,
-                        ambientColor = LimeChartreuseDark,
-                        spotColor = LimeChartreuseDark
+                        ambientColor = FacebookBlue,
+                        spotColor = FacebookBlue
                     )
                     .clip(CircleShape)
                     .background(containerColor)
                     .border(
-                        width = if (isSelected) 2.5.dp else 2.dp,
-                        color = if (isSelected) ContrastDarkCard else LimeChartreuse,
+                        width = 2.5.dp,
+                        color = PureWhiteCard,
                         shape = CircleShape
                     ),
                 contentAlignment = Alignment.Center
@@ -314,12 +300,12 @@ private fun CenterCameraNavButton(
                 Icon(
                     imageVector = Icons.Filled.PhotoCamera,
                     contentDescription = "AI Camera Scanner",
-                    tint = iconColor,
-                    modifier = Modifier.size(26.dp)
+                    tint = Color.White,
+                    modifier = Modifier.size(25.dp)
                 )
             }
 
-            // Live AI status badge dot on top-right of the camera orb
+            // Live AI status badge dot on top-right of the camera button
             Box(
                 modifier = Modifier
                     .size(13.dp)
@@ -333,7 +319,7 @@ private fun CenterCameraNavButton(
                     modifier = Modifier
                         .size(9.dp)
                         .clip(CircleShape)
-                        .background(if (isScanning) LimeChartreuseDark else EmeraldSafe)
+                        .background(if (isScanning) FacebookBlue else EmeraldSafe)
                 )
             }
         }
@@ -342,10 +328,10 @@ private fun CenterCameraNavButton(
             text = "Camera",
             style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = 11.sp,
-                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
             ),
-            color = if (isSelected) TextPrimary else TextSecondary,
-            modifier = Modifier.offset(y = (-6).dp)
+            color = if (isSelected) FacebookBlue else TextSecondary,
+            modifier = Modifier.offset(y = (-4).dp)
         )
     }
 }

@@ -21,9 +21,15 @@ import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+
+private val _googleProfilePhotoUrl = MutableStateFlow<String?>(null)
+val googleProfilePhotoUrlFlow: StateFlow<String?> = _googleProfilePhotoUrl.asStateFlow()
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -66,7 +72,9 @@ fun attemptAutoSignIn(
             val result = credentialManager.getCredential(context, request)
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                _googleProfilePhotoUrl.value = googleCred.profilePictureUri?.toString()
+                val googleIdToken = googleCred.idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
                 Firebase.auth.signInWithCredential(authCredential).await()
                 onAuthSuccess()
@@ -105,7 +113,9 @@ fun onGoogleSignInClicked(
             val result = credentialManager.getCredential(activityContext, request)
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                _googleProfilePhotoUrl.value = googleCred.profilePictureUri?.toString()
+                val googleIdToken = googleCred.idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
                 Firebase.auth.signInWithCredential(authCredential).await()
                 onAuthSuccess()
@@ -127,6 +137,7 @@ fun signOutUser(
     onSignOutComplete: () -> Unit,
     scope: CoroutineScope
 ) {
+    _googleProfilePhotoUrl.value = null
     Firebase.auth.signOut()
     scope.launch {
         try {

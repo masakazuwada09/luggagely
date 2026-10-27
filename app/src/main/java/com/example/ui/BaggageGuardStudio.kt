@@ -46,7 +46,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
@@ -54,6 +53,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Luggage
 import androidx.compose.material.icons.filled.MoveDown
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Scale
@@ -82,6 +82,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -95,6 +96,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.SubcomposeAsyncImage
 import com.example.R
 import com.example.model.AirlinePreset
 import com.example.model.BaggageGuardUiState
@@ -103,6 +105,7 @@ import com.example.model.BaggageItem
 import com.example.model.GearCategory
 import com.example.model.ItemSource
 import com.example.model.ManifestFilter
+import com.example.ui.components.ConnectedAirlineDashboardBanner
 import com.example.ui.components.FullScreenCameraSegmentationScreen
 import com.example.ui.components.SegmentationViewportCard
 import com.example.ui.components.StickyBottomNavBar
@@ -113,20 +116,19 @@ import com.example.ui.screens.QuickCameraScannerBanner
 import com.example.ui.screens.SettingsTabScreen
 import com.example.ui.theme.AmberManual
 import com.example.ui.theme.AmberManualGlow
-import com.example.ui.theme.ContrastDarkCard
 import com.example.ui.theme.CrimsonAlert
+import com.example.ui.theme.DashboardBorderLight
+import com.example.ui.theme.DashboardCardWhite
+import com.example.ui.theme.DashboardChipGray
+import com.example.ui.theme.DashboardFeedGrayBg
+import com.example.ui.theme.DashboardSurfaceLight
 import com.example.ui.theme.ElectricIndigo
 import com.example.ui.theme.EmeraldSafe
+import com.example.ui.theme.FacebookBlue
+import com.example.ui.theme.FacebookBlueSoftBg
 import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.LightBorderSubtle
-import com.example.ui.theme.LightCreamBg
-import com.example.ui.theme.LimeChartreuse
-import com.example.ui.theme.LimeChartreuseDark
 import com.example.ui.theme.PureWhiteCard
-import com.example.ui.theme.SoftGraySurface
-import com.example.ui.theme.SoftLimeTintBg
 import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextOnLime
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
@@ -134,12 +136,19 @@ import com.example.ui.theme.TextSecondary
 fun BaggageGuardStudio(
     viewModel: BaggageGuardViewModel = viewModel(),
     userLabel: String? = null,
+    userEmail: String? = null,
+    userPhotoUrl: String? = null,
+    isGoogleSignedIn: Boolean = false,
     onNavigateBackOrSignOut: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable { mutableStateOf(StudioTab.DASHBOARD) }
+
+    LaunchedEffect(userLabel, userEmail) {
+        viewModel.syncBookingWithUserIdentity(userLabel, userEmail)
+    }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -171,8 +180,8 @@ fun BaggageGuardStudio(
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .background(LightCreamBg),
-        containerColor = LightCreamBg,
+            .background(DashboardFeedGrayBg),
+        containerColor = DashboardFeedGrayBg,
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
             StickyBottomNavBar(
@@ -220,7 +229,16 @@ fun BaggageGuardStudio(
                                 ) {
                                     TopNavigationStatusRow(
                                         userLabel = userLabel,
+                                        userPhotoUrl = userPhotoUrl,
+                                        isGoogleSignedIn = isGoogleSignedIn,
+                                        onOpenProfileTab = { currentTab = StudioTab.PROFILE },
                                         onNavigateBackOrSignOut = onNavigateBackOrSignOut
+                                    )
+                                    ConnectedAirlineDashboardBanner(
+                                        uiState = uiState,
+                                        onSelectCarrier = viewModel::selectAirlineCarrier,
+                                        onApplyAllowanceMode = viewModel::applyBookingAllowanceToManifest,
+                                        onOpenProfileBooking = { currentTab = StudioTab.PROFILE }
                                     )
                                     QuickCameraScannerBanner(
                                         uiState = uiState,
@@ -272,14 +290,25 @@ fun BaggageGuardStudio(
                                 verticalArrangement = Arrangement.spacedBy(16.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                if (onNavigateBackOrSignOut != null || userLabel != null) {
-                                    item(key = "top_nav_row") {
-                                        TopNavigationStatusRow(
-                                            userLabel = userLabel,
-                                            onNavigateBackOrSignOut = onNavigateBackOrSignOut,
-                                            modifier = Modifier.widthIn(max = 640.dp)
-                                        )
-                                    }
+                                item(key = "top_nav_row") {
+                                    TopNavigationStatusRow(
+                                        userLabel = userLabel,
+                                        userPhotoUrl = userPhotoUrl,
+                                        isGoogleSignedIn = isGoogleSignedIn,
+                                        onOpenProfileTab = { currentTab = StudioTab.PROFILE },
+                                        onNavigateBackOrSignOut = onNavigateBackOrSignOut,
+                                        modifier = Modifier.widthIn(max = 640.dp)
+                                    )
+                                }
+
+                                item(key = "connected_airline_card") {
+                                    ConnectedAirlineDashboardBanner(
+                                        uiState = uiState,
+                                        onSelectCarrier = viewModel::selectAirlineCarrier,
+                                        onApplyAllowanceMode = viewModel::applyBookingAllowanceToManifest,
+                                        onOpenProfileBooking = { currentTab = StudioTab.PROFILE },
+                                        modifier = Modifier.widthIn(max = 640.dp)
+                                    )
                                 }
 
                                 item(key = "camera_shortcut") {
@@ -389,6 +418,11 @@ fun BaggageGuardStudio(
                         ProfileTabScreen(
                             uiState = uiState,
                             userLabel = userLabel,
+                            userEmail = userEmail,
+                            userPhotoUrl = userPhotoUrl,
+                            onBookingCodeChange = viewModel::updateBookingCodeInput,
+                            onConnectAndAnalyzeBooking = viewModel::connectAndAnalyzeAirlineBooking,
+                            onApplyAllowanceMode = viewModel::applyBookingAllowanceToManifest,
                             onNavigateBackOrSignOut = onNavigateBackOrSignOut
                         )
                     }
@@ -401,72 +435,160 @@ fun BaggageGuardStudio(
 @Composable
 private fun TopNavigationStatusRow(
     userLabel: String?,
+    userPhotoUrl: String?,
+    isGoogleSignedIn: Boolean,
+    onOpenProfileTab: () -> Unit,
     onNavigateBackOrSignOut: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
+    val displayNameOnly = userLabel
+        ?.takeIf { it.isNotBlank() && !it.equals("Guest Mode", ignoreCase = true) && !it.equals("Log In", ignoreCase = true) }
+        ?: "Masakazu Wada"
+
+    // No white background card wrapper on Dashboard — clean direct header row with larger profile pic and Name only
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (onNavigateBackOrSignOut != null) {
-            IconButton(
-                onClick = onNavigateBackOrSignOut,
+        // Left side: Larger Google Profile Photo + Name Only (Boarding & Baggage Details text removed)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            Box(
                 modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(PureWhiteCard)
-                    .border(1.dp, LightBorderSubtle, CircleShape)
-                    .testTag("studio_back_button")
+                    .size(62.dp)
+                    .testTag("dashboard_google_profile_photo")
+                    .clickable { onOpenProfileTab() },
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = TextPrimary,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        } else {
-            Spacer(modifier = Modifier.width(42.dp))
-        }
-
-        Text(
-            text = "Boarding & Baggage Details",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = TextPrimary
-        )
-
-        if (userLabel != null && onNavigateBackOrSignOut != null) {
-            Surface(
-                modifier = Modifier
-                    .testTag("account_status_chip")
-                    .clickable { onNavigateBackOrSignOut() },
-                color = PureWhiteCard,
-                shape = RoundedCornerShape(50),
-                border = BorderStroke(1.dp, LightBorderSubtle)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Text(
-                        text = userLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Surface(
+                    modifier = Modifier.size(58.dp),
+                    shape = CircleShape,
+                    color = DashboardSurfaceLight,
+                    border = BorderStroke(
+                        width = 2.dp,
+                        color = if (isGoogleSignedIn) FacebookBlue else DashboardBorderLight
                     )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Logout,
-                        contentDescription = "Switch Account or Sign Out",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(13.dp)
+                ) {
+                    if (!userPhotoUrl.isNullOrBlank()) {
+                        SubcomposeAsyncImage(
+                            model = userPhotoUrl,
+                            contentDescription = displayNameOnly,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            loading = {
+                                GoogleProfileFallbackAvatar(
+                                    userLabel = displayNameOnly,
+                                    isGoogleSignedIn = isGoogleSignedIn
+                                )
+                            },
+                            error = {
+                                GoogleProfileFallbackAvatar(
+                                    userLabel = displayNameOnly,
+                                    isGoogleSignedIn = isGoogleSignedIn
+                                )
+                            }
+                        )
+                    } else {
+                        GoogleProfileFallbackAvatar(
+                            userLabel = displayNameOnly,
+                            isGoogleSignedIn = isGoogleSignedIn
+                        )
+                    }
+                }
+
+                if (isGoogleSignedIn) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(15.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldSafe)
+                            .border(2.dp, DashboardFeedGrayBg, CircleShape)
                     )
                 }
             }
+
+            Text(
+                text = displayNameOnly,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 20.sp
+                ),
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (userLabel != null && onNavigateBackOrSignOut != null) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .testTag("account_status_chip")
+                    .clickable { onNavigateBackOrSignOut() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = "Sign Out",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Logout,
+                    contentDescription = "Switch Account or Sign Out",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GoogleProfileFallbackAvatar(
+    userLabel: String?,
+    isGoogleSignedIn: Boolean
+) {
+    val initial = userLabel
+        ?.trim()
+        ?.firstOrNull { it.isLetterOrDigit() }
+        ?.uppercaseChar()
+        ?.toString()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(if (isGoogleSignedIn) FacebookBlueSoftBg else DashboardChipGray),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!initial.isNullOrBlank()) {
+            Text(
+                text = initial,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 22.sp,
+                    color = FacebookBlue
+                )
+            )
         } else {
-            Spacer(modifier = Modifier.width(42.dp))
+            Icon(
+                imageVector = Icons.Default.Person,
+                contentDescription = "User Profile",
+                tint = if (isGoogleSignedIn) FacebookBlue else TextSecondary,
+                modifier = Modifier.size(28.dp)
+            )
         }
     }
 }
@@ -480,12 +602,12 @@ private fun EscortAdvisoryBanner(
 ) {
     val advisory = uiState.escortAdvisory
     val containerBorderColor by animateColorAsState(
-        targetValue = if (advisory.isOverweight) CrimsonAlert else LimeChartreuseDark,
+        targetValue = if (advisory.isOverweight) CrimsonAlert else DashboardBorderLight,
         animationSpec = tween(300),
         label = "advisory_border"
     )
     val containerBgColor by animateColorAsState(
-        targetValue = if (advisory.isOverweight) Color(0xFFFEF2F2) else SoftLimeTintBg,
+        targetValue = if (advisory.isOverweight) Color(0xFFFEF2F2) else DashboardCardWhite,
         animationSpec = tween(300),
         label = "advisory_bg"
     )
@@ -495,8 +617,8 @@ private fun EscortAdvisoryBanner(
             .fillMaxWidth()
             .testTag("escort_advisory_banner"),
         color = containerBgColor,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.2.dp, containerBorderColor)
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, containerBorderColor)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -509,7 +631,7 @@ private fun EscortAdvisoryBanner(
                 Icon(
                     imageVector = if (advisory.isOverweight) Icons.Default.WarningAmber else Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = if (advisory.isOverweight) CrimsonAlert else EmeraldSafe,
+                    tint = if (advisory.isOverweight) CrimsonAlert else FacebookBlue,
                     modifier = Modifier.size(22.dp)
                 )
 
@@ -523,7 +645,7 @@ private fun EscortAdvisoryBanner(
                     Text(
                         text = advisory.directive,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextPrimary,
+                        color = TextSecondary,
                         modifier = Modifier.testTag("escort_advisory_directive_text")
                     )
                 }
@@ -560,8 +682,8 @@ private fun EscortAdvisoryBanner(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(PureWhiteCard)
-                        .border(1.dp, LightBorderSubtle, RoundedCornerShape(12.dp))
+                        .background(DashboardSurfaceLight)
+                        .border(1.dp, DashboardBorderLight, RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -630,7 +752,7 @@ private fun DynamicManifestCard(
         targetValue = when {
             uiState.isOverweight -> CrimsonAlert
             uiState.isNearLimit -> AmberManual
-            else -> LimeChartreuse
+            else -> FacebookBlue
         },
         animationSpec = tween(300),
         label = "bar_color"
@@ -639,9 +761,9 @@ private fun DynamicManifestCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-        color = PureWhiteCard,
-        shape = RoundedCornerShape(24.dp)
+            .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+        color = DashboardCardWhite,
+        shape = RoundedCornerShape(16.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -660,7 +782,7 @@ private fun DynamicManifestCard(
                     Icon(
                         imageVector = Icons.Default.Scale,
                         contentDescription = null,
-                        tint = TextPrimary,
+                        tint = FacebookBlue,
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
@@ -673,11 +795,11 @@ private fun DynamicManifestCard(
                 Text(
                     text = uiState.selectedPreset.bagType,
                     style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted
+                    color = TextSecondary
                 )
             }
 
-            // Selectable Airline Allowance Presets
+            // Selectable Airline Allowance Presets (Clean White / Facebook Blue Pills)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -691,11 +813,11 @@ private fun DynamicManifestCard(
                             .height(40.dp)
                             .testTag("airline_preset_${preset.id}")
                             .clickable { onSelectPreset(preset) },
-                        color = if (isSelected) LimeChartreuse else SoftGraySurface,
+                        color = if (isSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
                         shape = RoundedCornerShape(50),
                         border = BorderStroke(
                             1.dp,
-                            if (isSelected) LimeChartreuseDark else LightBorderSubtle
+                            if (isSelected) FacebookBlue else DashboardBorderLight
                         )
                     ) {
                         Row(
@@ -706,7 +828,7 @@ private fun DynamicManifestCard(
                             Icon(
                                 imageVector = if (preset.limitKg <= 10.0) Icons.Default.FlightTakeoff else Icons.Default.Luggage,
                                 contentDescription = null,
-                                tint = if (isSelected) TextOnLime else TextSecondary,
+                                tint = if (isSelected) FacebookBlue else TextSecondary,
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
@@ -714,17 +836,18 @@ private fun DynamicManifestCard(
                                 style = MaterialTheme.typography.labelMedium.copy(
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 ),
-                                color = if (isSelected) TextOnLime else TextSecondary
+                                color = if (isSelected) FacebookBlue else TextSecondary
                             )
                         }
                     }
                 }
             }
 
-            // Dark Contrast Boarding & Cumulative Weight Hero Card (matching the "Boarding Details" card in the reference image!)
+            // Clean White & Light Gray Cumulative Weight Summary Card (No Yellow, No Dark Background)
             Surface(
-                color = ContrastDarkCard,
-                shape = RoundedCornerShape(22.dp)
+                color = DashboardSurfaceLight,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, DashboardBorderLight)
             ) {
                 Column(
                     modifier = Modifier
@@ -732,7 +855,6 @@ private fun DynamicManifestCard(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Top Flight Route Row (GOA -> DEL style from reference image)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -741,12 +863,12 @@ private fun DynamicManifestCard(
                         Text(
                             text = "Global Nomad Express",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.65f)
+                            color = TextSecondary
                         )
                         Text(
                             text = "GATE 21B • TERMINAL 4",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = LimeChartreuse
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = FacebookBlue
                         )
                     }
 
@@ -759,7 +881,7 @@ private fun DynamicManifestCard(
                             Text(
                                 text = stringResource(R.string.cumulative_weight_label),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.7f)
+                                color = TextSecondary
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Row(
@@ -772,7 +894,7 @@ private fun DynamicManifestCard(
                                         fontFamily = JetBrainsMonoFontFamily,
                                         fontWeight = FontWeight.Bold
                                     ),
-                                    color = if (uiState.isOverweight) CrimsonAlert else LimeChartreuse,
+                                    color = if (uiState.isOverweight) CrimsonAlert else TextPrimary,
                                     modifier = Modifier.testTag("total_weight_value")
                                 )
                                 Text(
@@ -780,7 +902,7 @@ private fun DynamicManifestCard(
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontFamily = JetBrainsMonoFontFamily
                                     ),
-                                    color = Color.White.copy(alpha = 0.75f),
+                                    color = TextSecondary,
                                     modifier = Modifier.padding(bottom = 4.dp)
                                 )
                             }
@@ -788,14 +910,14 @@ private fun DynamicManifestCard(
 
                         val deltaSign = if (uiState.deltaKg > 0) "+" else ""
                         Surface(
-                            color = barColor.copy(alpha = 0.22f),
+                            color = if (uiState.isOverweight) Color(0xFFFEF2F2) else FacebookBlueSoftBg,
                             shape = RoundedCornerShape(50),
-                            border = BorderStroke(1.dp, barColor)
+                            border = BorderStroke(1.dp, if (uiState.isOverweight) CrimsonAlert else FacebookBlue)
                         ) {
                             Text(
                                 text = "$deltaSign${BaggageGuardUiState.formatWeight(uiState.deltaKg)} kg",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = if (uiState.isOverweight) Color(0xFFFCA5A5) else LimeChartreuse,
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = if (uiState.isOverweight) CrimsonAlert else FacebookBlue,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                             )
                         }
@@ -805,9 +927,9 @@ private fun DynamicManifestCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(12.dp)
+                            .height(10.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(Color.White.copy(alpha = 0.12f))
+                            .background(DashboardChipGray)
                             .testTag("weight_progress_bar")
                     ) {
                         Box(
@@ -826,28 +948,29 @@ private fun DynamicManifestCard(
                         )
                     }
 
-                    // Signature Lime Pill inside Dark Card (just like "Departure Timer: 04 Hours 02 Mins" in reference)
+                    // Clean Soft Blue / White Summary Strip
                     Surface(
-                        color = if (uiState.isOverweight) CrimsonAlert else LimeChartreuse,
-                        shape = RoundedCornerShape(50),
+                        color = if (uiState.isOverweight) CrimsonAlert else DashboardCardWhite,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (uiState.isOverweight) CrimsonAlert else DashboardBorderLight),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 text = "AI: ${BaggageGuardUiState.formatWeight(uiState.aiScannedWeightKg)} kg • Manual: ${BaggageGuardUiState.formatWeight(uiState.manualWeightKg)} kg",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = if (uiState.isOverweight) Color.White else TextOnLime
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = if (uiState.isOverweight) Color.White else TextSecondary
                             )
                             Text(
                                 text = "${(uiState.weightRatio * 100).toInt()}% LOAD",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = if (uiState.isOverweight) Color.White else TextOnLime
+                                color = if (uiState.isOverweight) Color.White else FacebookBlue
                             )
                         }
                     }
@@ -865,17 +988,19 @@ private fun DynamicManifestCard(
                         modifier = Modifier
                             .testTag("manifest_filter_${filter.name.lowercase()}")
                             .clickable { onSelectFilter(filter) },
-                        color = if (isSelected) ContrastDarkCard else SoftGraySurface,
+                        color = if (isSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
                         shape = RoundedCornerShape(50),
                         border = BorderStroke(
                             1.dp,
-                            if (isSelected) ContrastDarkCard else LightBorderSubtle
+                            if (isSelected) FacebookBlue else DashboardBorderLight
                         )
                     ) {
                         Text(
                             text = filter.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isSelected) Color.White else TextSecondary,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (isSelected) FacebookBlue else TextSecondary,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                         )
                     }
@@ -886,9 +1011,9 @@ private fun DynamicManifestCard(
             val displayedItems = uiState.filteredActiveItems
             if (displayedItems.isEmpty()) {
                 Surface(
-                    color = SoftGraySurface,
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, LightBorderSubtle)
+                    color = DashboardSurfaceLight,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, DashboardBorderLight)
                 ) {
                     Column(
                         modifier = Modifier
@@ -899,7 +1024,7 @@ private fun DynamicManifestCard(
                     ) {
                         Text(
                             text = stringResource(R.string.empty_manifest_title),
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = TextPrimary
                         )
                         Text(
@@ -945,9 +1070,9 @@ private fun ManifestItemRow(
     val indicatorColor = if (isAi) ElectricIndigo else AmberManual
 
     val borderColor = when {
-        isSelected -> LimeChartreuseDark
+        isSelected -> FacebookBlue
         isRecommendedForShift -> CrimsonAlert.copy(alpha = 0.75f)
-        else -> LightBorderSubtle
+        else -> DashboardBorderLight
     }
 
     Surface(
@@ -955,8 +1080,8 @@ private fun ManifestItemRow(
             .fillMaxWidth()
             .testTag("manifest_item_${item.id}")
             .clickable { onSelect() },
-        color = if (isSelected) SoftLimeTintBg else SoftGraySurface,
-        shape = RoundedCornerShape(16.dp),
+        color = if (isSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, borderColor)
     ) {
         Column(
@@ -994,7 +1119,7 @@ private fun ManifestItemRow(
                         ) {
                             Text(
                                 text = if (isAi) {
-                                    "${item.maskId ?: "SAM-3.1"} • ${((item.confidence ?: 0.98f) * 100).toInt()}% CONF"
+                                    "${item.maskId ?: "META-SAM"} • MUSE-SPARK-1.3 • ${((item.confidence ?: 0.98f) * 100).toInt()}% CONF"
                                 } else {
                                     "MANUAL OVERRIDE"
                                 },
@@ -1025,9 +1150,9 @@ private fun ManifestItemRow(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Surface(
-                        color = PureWhiteCard,
+                        color = DashboardCardWhite,
                         shape = RoundedCornerShape(50),
-                        border = BorderStroke(1.dp, LightBorderSubtle)
+                        border = BorderStroke(1.dp, DashboardBorderLight)
                     ) {
                         Text(
                             text = "${BaggageGuardUiState.formatWeight(item.weightKg)} kg",
@@ -1076,7 +1201,7 @@ private fun ManifestItemRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
-                        .background(PureWhiteCard)
+                        .background(DashboardCardWhite)
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -1096,7 +1221,7 @@ private fun ManifestItemRow(
                             modifier = Modifier.height(34.dp),
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            border = BorderStroke(1.dp, LightBorderSubtle)
+                            border = BorderStroke(1.dp, DashboardBorderLight)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Remove,
@@ -1117,7 +1242,7 @@ private fun ManifestItemRow(
                             modifier = Modifier.height(34.dp),
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            border = BorderStroke(1.dp, LightBorderSubtle)
+                            border = BorderStroke(1.dp, DashboardBorderLight)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
@@ -1154,9 +1279,9 @@ private fun ManualOverrideFormCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .border(1.dp, LightBorderSubtle, RoundedCornerShape(24.dp)),
-        color = PureWhiteCard,
-        shape = RoundedCornerShape(24.dp)
+            .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
+        color = DashboardCardWhite,
+        shape = RoundedCornerShape(16.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -1170,7 +1295,7 @@ private fun ManualOverrideFormCard(
                     modifier = Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(AmberManual)
+                        .background(FacebookBlue)
                 )
                 Column {
                     Text(
@@ -1204,9 +1329,9 @@ private fun ManualOverrideFormCard(
                         modifier = Modifier
                             .testTag("quick_manual_preset_$idx")
                             .clickable { onQuickPreset(label, kg, cat) },
-                        color = SoftLimeTintBg,
+                        color = DashboardSurfaceLight,
                         shape = RoundedCornerShape(50),
-                        border = BorderStroke(1.dp, LimeChartreuseDark.copy(alpha = 0.4f))
+                        border = BorderStroke(1.dp, DashboardBorderLight)
                     ) {
                         Text(
                             text = "+ $label (${BaggageGuardUiState.formatWeight(kg)}kg)",
@@ -1229,17 +1354,19 @@ private fun ManualOverrideFormCard(
                     val selected = uiState.manualCategory == category
                     Surface(
                         modifier = Modifier.clickable { onCategoryChange(category) },
-                        color = if (selected) ContrastDarkCard else SoftGraySurface,
+                        color = if (selected) FacebookBlueSoftBg else DashboardSurfaceLight,
                         shape = RoundedCornerShape(50),
                         border = BorderStroke(
                             1.dp,
-                            if (selected) ContrastDarkCard else LightBorderSubtle
+                            if (selected) FacebookBlue else DashboardBorderLight
                         )
                     ) {
                         Text(
                             text = category.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (selected) Color.White else TextSecondary,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (selected) FacebookBlue else TextSecondary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
@@ -1267,13 +1394,13 @@ private fun ManualOverrideFormCard(
                     },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = TextPrimary),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = LimeChartreuseDark,
-                        unfocusedBorderColor = LightBorderSubtle,
-                        focusedContainerColor = SoftGraySurface,
-                        unfocusedContainerColor = SoftGraySurface,
-                        cursorColor = TextPrimary
+                        focusedBorderColor = FacebookBlue,
+                        unfocusedBorderColor = DashboardBorderLight,
+                        focusedContainerColor = DashboardSurfaceLight,
+                        unfocusedContainerColor = DashboardSurfaceLight,
+                        cursorColor = FacebookBlue
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
                 )
@@ -1295,7 +1422,7 @@ private fun ManualOverrideFormCard(
                         Text(
                             text = "kg",
                             style = MaterialTheme.typography.labelSmall,
-                            color = AmberManualGlow
+                            color = TextSecondary
                         )
                     },
                     singleLine = true,
@@ -1303,13 +1430,13 @@ private fun ManualOverrideFormCard(
                         fontFamily = JetBrainsMonoFontFamily,
                         color = TextPrimary
                     ),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = LimeChartreuseDark,
-                        unfocusedBorderColor = LightBorderSubtle,
-                        focusedContainerColor = SoftGraySurface,
-                        unfocusedContainerColor = SoftGraySurface,
-                        cursorColor = TextPrimary
+                        focusedBorderColor = FacebookBlue,
+                        unfocusedBorderColor = DashboardBorderLight,
+                        focusedContainerColor = DashboardSurfaceLight,
+                        unfocusedContainerColor = DashboardSurfaceLight,
+                        cursorColor = FacebookBlue
                     ),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Decimal,
@@ -1340,12 +1467,12 @@ private fun ManualOverrideFormCard(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(48.dp)
                     .testTag("add_manual_item_button"),
-                shape = RoundedCornerShape(50),
+                shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = LimeChartreuse,
-                    contentColor = TextOnLime
+                    containerColor = FacebookBlue,
+                    contentColor = Color.White
                 )
             ) {
                 Icon(
@@ -1358,7 +1485,7 @@ private fun ManualOverrideFormCard(
                     text = stringResource(R.string.add_to_manifest),
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Bold,
-                        color = TextOnLime
+                        color = Color.White
                     )
                 )
             }
