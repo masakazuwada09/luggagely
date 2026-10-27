@@ -59,17 +59,23 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -103,6 +109,7 @@ import com.example.model.BaggageGuardUiState
 import com.example.model.BaggageGuardViewModel
 import com.example.model.BaggageItem
 import com.example.model.GearCategory
+import com.example.model.GearRigPreset
 import com.example.model.ItemSource
 import com.example.model.ManifestFilter
 import com.example.ui.components.ConnectedAirlineDashboardBanner
@@ -132,6 +139,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BaggageGuardStudio(
     viewModel: BaggageGuardViewModel = viewModel(),
@@ -145,9 +153,117 @@ fun BaggageGuardStudio(
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable { mutableStateOf(StudioTab.DASHBOARD) }
+    var showSignOutConfirmDialog by rememberSaveable { mutableStateOf(false) }
+    var bottomSheetItemId by rememberSaveable { mutableStateOf<String?>(null) }
+    var bottomSheetBagRigId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val requestSignOutWithConfirmation: (() -> Unit)? = if (onNavigateBackOrSignOut != null) {
+        { showSignOutConfirmDialog = true }
+    } else {
+        null
+    }
 
     LaunchedEffect(userLabel, userEmail) {
         viewModel.syncBookingWithUserIdentity(userLabel, userEmail)
+    }
+
+    val activeBottomSheetItem = uiState.items.find { it.id == bottomSheetItemId }
+    if (activeBottomSheetItem != null) {
+        val itemSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { bottomSheetItemId = null },
+            sheetState = itemSheetState,
+            containerColor = DashboardCardWhite,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            modifier = Modifier.testTag("luggage_item_details_bottom_sheet")
+        ) {
+            LuggageItemDetailsSheetContent(
+                item = activeBottomSheetItem,
+                uiState = uiState,
+                onAdjustWeight = { delta -> viewModel.adjustItemWeight(activeBottomSheetItem.id, delta) },
+                onToggleShift = { viewModel.toggleShiftToPersonal(activeBottomSheetItem.id) },
+                onDelete = {
+                    viewModel.deleteItem(activeBottomSheetItem.id)
+                    bottomSheetItemId = null
+                },
+                onClose = { bottomSheetItemId = null }
+            )
+        }
+    }
+
+    val activeBottomSheetRig = GearRigPreset.entries.find { it.id == bottomSheetBagRigId }
+    if (activeBottomSheetRig != null && activeBottomSheetItem == null) {
+        val bagSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { bottomSheetBagRigId = null },
+            sheetState = bagSheetState,
+            containerColor = DashboardCardWhite,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            modifier = Modifier.testTag("luggage_bag_details_bottom_sheet")
+        ) {
+            LuggageBagDetailsSheetContent(
+                rig = activeBottomSheetRig,
+                uiState = uiState,
+                onInspectItem = { itemId ->
+                    bottomSheetBagRigId = null
+                    viewModel.selectItem(itemId)
+                    bottomSheetItemId = itemId
+                },
+                onClose = { bottomSheetBagRigId = null }
+            )
+        }
+    }
+
+    if (showSignOutConfirmDialog && onNavigateBackOrSignOut != null) {
+        AlertDialog(
+            onDismissRequest = { showSignOutConfirmDialog = false },
+            containerColor = DashboardCardWhite,
+            title = {
+                Text(
+                    text = "Confirm Sign Out",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to sign out of your Luggagely account?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSignOutConfirmDialog = false
+                        onNavigateBackOrSignOut()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CrimsonAlert,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("confirm_sign_out_button")
+                ) {
+                    Text(
+                        text = "Sign Out",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showSignOutConfirmDialog = false },
+                    modifier = Modifier.testTag("cancel_sign_out_button")
+                ) {
+                    Text(
+                        text = "Cancel",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextSecondary
+                    )
+                }
+            }
+        )
     }
 
     var hasCameraPermission by remember {
@@ -232,7 +348,7 @@ fun BaggageGuardStudio(
                                         userPhotoUrl = userPhotoUrl,
                                         isGoogleSignedIn = isGoogleSignedIn,
                                         onOpenProfileTab = { currentTab = StudioTab.PROFILE },
-                                        onNavigateBackOrSignOut = onNavigateBackOrSignOut
+                                        onNavigateBackOrSignOut = requestSignOutWithConfirmation
                                     )
                                     ConnectedAirlineDashboardBanner(
                                         uiState = uiState,
@@ -265,8 +381,17 @@ fun BaggageGuardStudio(
                                     DynamicManifestCard(
                                         uiState = uiState,
                                         onSelectPreset = viewModel::selectAirlinePreset,
+                                        onSelectRig = { rig ->
+                                            viewModel.selectGearRig(rig)
+                                            bottomSheetBagRigId = rig.id
+                                        },
                                         onSelectFilter = viewModel::setManifestFilter,
-                                        onSelectItem = viewModel::selectItem,
+                                        onSelectItem = { itemId ->
+                                            viewModel.selectItem(itemId)
+                                            if (itemId != null) {
+                                                bottomSheetItemId = itemId
+                                            }
+                                        },
                                         onAdjustWeight = viewModel::adjustItemWeight,
                                         onShiftItem = viewModel::toggleShiftToPersonal,
                                         onDeleteItem = viewModel::deleteItem
@@ -296,7 +421,7 @@ fun BaggageGuardStudio(
                                         userPhotoUrl = userPhotoUrl,
                                         isGoogleSignedIn = isGoogleSignedIn,
                                         onOpenProfileTab = { currentTab = StudioTab.PROFILE },
-                                        onNavigateBackOrSignOut = onNavigateBackOrSignOut,
+                                        onNavigateBackOrSignOut = requestSignOutWithConfirmation,
                                         modifier = Modifier.widthIn(max = 640.dp)
                                     )
                                 }
@@ -336,8 +461,17 @@ fun BaggageGuardStudio(
                                     DynamicManifestCard(
                                         uiState = uiState,
                                         onSelectPreset = viewModel::selectAirlinePreset,
+                                        onSelectRig = { rig ->
+                                            viewModel.selectGearRig(rig)
+                                            bottomSheetBagRigId = rig.id
+                                        },
                                         onSelectFilter = viewModel::setManifestFilter,
-                                        onSelectItem = viewModel::selectItem,
+                                        onSelectItem = { itemId ->
+                                            viewModel.selectItem(itemId)
+                                            if (itemId != null) {
+                                                bottomSheetItemId = itemId
+                                            }
+                                        },
                                         onAdjustWeight = viewModel::adjustItemWeight,
                                         onShiftItem = viewModel::toggleShiftToPersonal,
                                         onDeleteItem = viewModel::deleteItem,
@@ -420,10 +554,11 @@ fun BaggageGuardStudio(
                             userLabel = userLabel,
                             userEmail = userEmail,
                             userPhotoUrl = userPhotoUrl,
+                            onSelectCarrier = viewModel::selectAirlineCarrier,
                             onBookingCodeChange = viewModel::updateBookingCodeInput,
                             onConnectAndAnalyzeBooking = viewModel::connectAndAnalyzeAirlineBooking,
                             onApplyAllowanceMode = viewModel::applyBookingAllowanceToManifest,
-                            onNavigateBackOrSignOut = onNavigateBackOrSignOut
+                            onNavigateBackOrSignOut = requestSignOutWithConfirmation
                         )
                     }
                 }
@@ -442,8 +577,8 @@ private fun TopNavigationStatusRow(
     modifier: Modifier = Modifier
 ) {
     val displayNameOnly = userLabel
-        ?.takeIf { it.isNotBlank() && !it.equals("Guest Mode", ignoreCase = true) && !it.equals("Log In", ignoreCase = true) }
-        ?: "Masakazu Wada"
+        ?.takeIf { it.isNotBlank() }
+        ?: "Guest Traveler"
 
     // No white background card wrapper on Dashboard — clean direct header row with larger profile pic and Name only
     Row(
@@ -735,6 +870,7 @@ private fun EscortAdvisoryBanner(
 private fun DynamicManifestCard(
     uiState: BaggageGuardUiState,
     onSelectPreset: (AirlinePreset) -> Unit,
+    onSelectRig: (GearRigPreset) -> Unit,
     onSelectFilter: (ManifestFilter) -> Unit,
     onSelectItem: (String?) -> Unit,
     onAdjustWeight: (String, Double) -> Unit,
@@ -843,7 +979,7 @@ private fun DynamicManifestCard(
                 }
             }
 
-            // Clean White & Light Gray Cumulative Weight Summary Card (No Yellow, No Dark Background)
+            // Clean White & Light Gray Cumulative Weight Summary Card linked to Connected Airline Booking
             Surface(
                 color = DashboardSurfaceLight,
                 shape = RoundedCornerShape(16.dp),
@@ -861,12 +997,16 @@ private fun DynamicManifestCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Global Nomad Express",
+                            text = "${uiState.connectedBooking.carrier.carrierName} (${uiState.connectedBooking.flightNumber}) • PNR ${uiState.connectedBooking.bookingCode}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "GATE 21B • TERMINAL 4",
+                            text = "SEAT ${uiState.connectedBooking.seatNumber.substringBefore(" ")} • ${uiState.connectedBooking.carrier.iataCode}",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = FacebookBlue
                         )
@@ -977,6 +1117,119 @@ private fun DynamicManifestCard(
                 }
             }
 
+            // Dashboard Luggage Lists (Luggage Bags / Loadout Rigs — Click to view Bag Details in Bottom Sheet)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "LUGGAGE LISTS (TAP BAG OR ITEM FOR DETAILS)",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = TextSecondary
+                        )
+                    )
+                    Text(
+                        text = "${GearRigPreset.entries.size} Bags • ${uiState.activeItems.size} Items",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = FacebookBlue
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GearRigPreset.entries.forEach { rig ->
+                        val isRigSelected = uiState.selectedRig == rig
+                        val rigItems = BaggageGuardViewModel.buildRigItems(rig)
+                        val rigTotalKg = if (isRigSelected) uiState.totalWeightKg else rigItems.sumOf { it.weightKg }
+
+                        Surface(
+                            modifier = Modifier
+                                .width(205.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onSelectRig(rig) }
+                                .testTag("dashboard_luggage_bag_${rig.id}"),
+                            color = if (isRigSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(
+                                width = if (isRigSelected) 1.5.dp else 1.dp,
+                                color = if (isRigSelected) FacebookBlue else DashboardBorderLight
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Luggage,
+                                            contentDescription = null,
+                                            tint = if (isRigSelected) FacebookBlue else TextSecondary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Text(
+                                            text = rig.title,
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            ),
+                                            color = TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = rig.subtitle,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${BaggageGuardUiState.formatWeight(rigTotalKg)} / ${BaggageGuardUiState.formatWeight(rig.defaultLimit.limitKg)} kg",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isRigSelected) FacebookBlue else TextPrimary
+                                        )
+                                    )
+                                    Text(
+                                        text = "Details →",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = FacebookBlue
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Filter Pills (All / AI-Scanned / Manual Override)
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1007,7 +1260,7 @@ private fun DynamicManifestCard(
                 }
             }
 
-            // Interactive Manifest Item List
+            // Interactive Manifest Item List (Click any item to open Bottom Sheet with full Luggage Details)
             val displayedItems = uiState.filteredActiveItems
             if (displayedItems.isEmpty()) {
                 Surface(
@@ -1492,3 +1745,595 @@ private fun ManualOverrideFormCard(
         }
     }
 }
+
+@Composable
+private fun LuggageItemDetailsSheetContent(
+    item: BaggageItem,
+    uiState: BaggageGuardUiState,
+    onAdjustWeight: (Double) -> Unit,
+    onToggleShift: () -> Unit,
+    onDelete: () -> Unit,
+    onClose: () -> Unit
+) {
+    val isAi = item.source == ItemSource.AI_SCANNED
+    val booking = uiState.connectedBooking
+    val shareOfAllowance = if (uiState.limitKg > 0.0) {
+        ((item.weightKg / uiState.limitKg) * 100.0).toInt().coerceAtLeast(1)
+    } else {
+        0
+    }
+    val categoryRuleAdvisory = when (item.category) {
+        GearCategory.POWER ->
+            "Lithium Battery Rule (${booking.carrier.carrierName}): Must be packed in your ${BaggageGuardUiState.formatWeight(booking.cabinInclusionKg)} kg Cabin Carry-On or Under-Seat Personal Bag. Prohibited in Checked Hold."
+        GearCategory.COMPUTE ->
+            "High-Value Electronics (${booking.carrier.carrierName}): Recommended in Cabin Carry-On or Personal Laptop Sleeve under e-Ticket ${booking.eTicketNumber}."
+        GearCategory.LIQUIDS ->
+            "LAGs Rule (${booking.carrier.carrierName}): Containers ≤100ml in 1L resealable pouch for Cabin; larger containers covered by ${BaggageGuardUiState.formatWeight(booking.checkedInclusionKg)} kg Checked Baggage."
+        GearCategory.APPAREL ->
+            "Apparel & Footwear (${booking.carrier.carrierName}): Ideal candidate for ${BaggageGuardUiState.formatWeight(booking.checkedInclusionKg)} kg Checked Baggage if Cabin exceeds ${BaggageGuardUiState.formatWeight(booking.cabinInclusionKg)} kg."
+        GearCategory.ACCESSORY ->
+            "General Travel Gear (${booking.carrier.carrierName}): Cleared for both ${BaggageGuardUiState.formatWeight(booking.cabinInclusionKg)} kg Cabin and ${BaggageGuardUiState.formatWeight(booking.checkedInclusionKg)} kg Checked Hold."
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Sheet Header: Luggage Item Name + Weight Pill
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (isAi) FacebookBlueSoftBg else AmberManualGlow),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Luggage,
+                        contentDescription = null,
+                        tint = if (isAi) FacebookBlue else AmberManual,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "LUGGAGE ITEM DETAILS",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = FacebookBlue
+                        )
+                    )
+                    Text(
+                        text = item.name,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 19.sp
+                        ),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "${item.category.label} (${item.category.tagCode})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+            }
+
+            Surface(
+                color = FacebookBlueSoftBg,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, FacebookBlue)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "${BaggageGuardUiState.formatWeight(item.weightKg)} kg",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = FacebookBlue
+                        )
+                    )
+                    Text(
+                        text = "${(item.weightKg * 1000).toInt()} g",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            color = TextSecondary
+                        )
+                    )
+                }
+            }
+        }
+
+        // Luggage Telemetry Grid Card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = DashboardSurfaceLight,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, DashboardBorderLight)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "DETECTION SOURCE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = if (isAi) "Muse Spark 1.3 + Meta SAM 3.1" else "Manual Override Entry",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextPrimary
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "SEGMENTATION & CONFIDENCE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = if (isAi) {
+                                "${item.maskId ?: "SAM-MASK"} • ${((item.confidence ?: 0.98f) * 100).toInt()}%"
+                            } else {
+                                "USER VERIFIED"
+                            },
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isAi) ElectricIndigo else AmberManual
+                            )
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = DashboardBorderLight)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "CURRENT BAG PLACEMENT",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = if (item.isShiftedToPersonal) {
+                                "Personal Item Buffer (Under-Seat Bag)"
+                            } else {
+                                "Main Luggage (${uiState.selectedRig.title})"
+                            },
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = if (item.isShiftedToPersonal) ElectricIndigo else TextPrimary
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "ALLOWANCE SHARE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = "$shareOfAllowance% of ${BaggageGuardUiState.formatWeight(uiState.limitKg)} kg",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                color = FacebookBlue
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // Linked Airline Booking Context Card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = DashboardSurfaceLight,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, DashboardBorderLight)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "LINKED AIRLINE BOOKING (${booking.carrier.carrierName.uppercase()})",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = FacebookBlue
+                        )
+                    )
+                    Text(
+                        text = "PNR: ${booking.bookingCode}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                    )
+                }
+                Text(
+                    text = "${booking.passengerName} (${booking.iataPassengerName}) • E-Ticket ${booking.eTicketNumber}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextPrimary
+                )
+                Text(
+                    text = "${booking.flightNumber} • ${booking.route} • Seat ${booking.seatNumber}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = categoryRuleAdvisory,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        color = TextPrimary
+                    )
+                )
+            }
+        }
+
+        // Weight Calibration Row inside Bottom Sheet
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = DashboardSurfaceLight,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, DashboardBorderLight)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ADJUST WEIGHT:",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = TextSecondary
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        onClick = { onAdjustWeight(-0.50) },
+                        modifier = Modifier.height(34.dp),
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                    ) {
+                        Text("-0.5kg", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = { onAdjustWeight(-0.10) },
+                        modifier = Modifier.height(34.dp),
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                    ) {
+                        Text("-0.1kg", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = { onAdjustWeight(0.10) },
+                        modifier = Modifier.height(34.dp),
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                    ) {
+                        Text("+0.1kg", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = { onAdjustWeight(0.50) },
+                        modifier = Modifier.height(34.dp),
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                    ) {
+                        Text("+0.5kg", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+
+        // Action Buttons Row (Shift to Personal / Delete / Close)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = onToggleShift,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(46.dp)
+                    .testTag("bottom_sheet_shift_item_button"),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, FacebookBlue)
+            ) {
+                Icon(
+                    imageVector = if (item.isShiftedToPersonal) Icons.Default.Restore else Icons.Default.MoveDown,
+                    contentDescription = null,
+                    tint = FacebookBlue,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (item.isShiftedToPersonal) "Move to Main Bag" else "Shift to Personal",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = FacebookBlue
+                    )
+                )
+            }
+
+            OutlinedButton(
+                onClick = onDelete,
+                modifier = Modifier
+                    .height(46.dp)
+                    .testTag("bottom_sheet_delete_item_button"),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CrimsonAlert)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DeleteOutline,
+                    contentDescription = null,
+                    tint = CrimsonAlert,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Remove",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = CrimsonAlert
+                    )
+                )
+            }
+        }
+
+        Button(
+            onClick = onClose,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(46.dp)
+                .testTag("bottom_sheet_close_button"),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = FacebookBlue,
+                contentColor = Color.White
+            )
+        ) {
+            Text(
+                text = "Done",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun LuggageBagDetailsSheetContent(
+    rig: GearRigPreset,
+    uiState: BaggageGuardUiState,
+    onInspectItem: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    val booking = uiState.connectedBooking
+    val itemsInBag = uiState.activeItems
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(FacebookBlueSoftBg),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Luggage,
+                        contentDescription = null,
+                        tint = FacebookBlue,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "LUGGAGE BAG DETAILS",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = FacebookBlue
+                        )
+                    )
+                    Text(
+                        text = rig.title,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 19.sp
+                        ),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "${rig.subtitle} • ${rig.defaultLimit.shortLabel}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+            }
+
+            Surface(
+                color = FacebookBlueSoftBg,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, FacebookBlue)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "${BaggageGuardUiState.formatWeight(uiState.totalWeightKg)} kg",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = FacebookBlue
+                        )
+                    )
+                    Text(
+                        text = "/ ${BaggageGuardUiState.formatWeight(uiState.limitKg)} kg",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            color = TextSecondary
+                        )
+                    )
+                }
+            }
+        }
+
+        // Airline Booking & Bag Compliance Summary
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = DashboardSurfaceLight,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, DashboardBorderLight)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "${booking.carrier.carrierName} (${booking.flightNumber}) • PNR ${booking.bookingCode}",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = FacebookBlue
+                    )
+                )
+                Text(
+                    text = "Passenger: ${booking.passengerName} (${booking.iataPassengerName}) • E-Ticket ${booking.eTicketNumber}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextPrimary
+                )
+                Text(
+                    text = "${booking.route} • ${booking.terminalGate} • Seat ${booking.seatNumber}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+        }
+
+        Text(
+            text = "ITEMS IN THIS LUGGAGE (${itemsInBag.size}) • TAP ITEM FOR DETAILS",
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.Bold,
+                color = TextSecondary
+            )
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            itemsInBag.forEach { bagItem ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onInspectItem(bagItem.id) },
+                    color = DashboardSurfaceLight,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, DashboardBorderLight)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = bagItem.name,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "${bagItem.category.label} • ${if (bagItem.source == ItemSource.AI_SCANNED) "AI Scanned" else "Manual"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                        Text(
+                            text = "${BaggageGuardUiState.formatWeight(bagItem.weightKg)} kg →",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                color = FacebookBlue
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        Button(
+            onClick = onClose,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(46.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = FacebookBlue,
+                contentColor = Color.White
+            )
+        ) {
+            Text(
+                text = "Close",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+

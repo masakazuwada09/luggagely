@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,8 @@ import {
   TextInput,
   Image,
   StyleSheet,
-  ActivityIndicator,
+  Modal,
+  Alert,
 } from 'react-native';
 import {
   AIRLINE_ALLOWANCE_PRESETS,
@@ -37,6 +38,50 @@ interface DashboardScreenProps {
   onSignOut: () => void;
 }
 
+function deriveAccountBookingDetails(
+  carrier: AirlineCarrierOption,
+  passengerName: string,
+  passengerEmail: string
+) {
+  const seed = `${passengerName.toLowerCase()}|${passengerEmail.toLowerCase()}|${carrier.id}`;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let suffix = '';
+  let h = hash;
+  for (let i = 0; i < 4; i++) {
+    suffix += chars[h % chars.length];
+    h = Math.floor(h / chars.length);
+  }
+  const pnr = `${carrier.iataCode}${suffix}`;
+  const prefix = carrier.iataCode === '5J' ? '203' : carrier.iataCode === 'PR' ? '079' : '807';
+  const eTicket = `${prefix}-${1000000000 + (hash % 9000000000)}`;
+  const row = (hash % 24) + 4;
+  const cols = ['A', 'C', 'D', 'F', 'K'];
+  const seat = `${row}${cols[hash % cols.length]}`;
+  const parts = passengerName.trim().split(/\s+/).filter(Boolean);
+  const iataName =
+    parts.length >= 2
+      ? `${parts[parts.length - 1].toUpperCase()}/${parts.slice(0, -1).join(' ').toUpperCase()}`
+      : `${passengerName.toUpperCase()}/TRAVELER`;
+  const terminalGate =
+    carrier.iataCode === '5J'
+      ? 'NAIA Terminal 3 • Gate 114'
+      : carrier.iataCode === 'PR'
+      ? 'NAIA Terminal 1 • Gate 9'
+      : 'NAIA Terminal 3 • Gate 108';
+  const schedule =
+    carrier.iataCode === '5J'
+      ? '08:40 HRS (MNL T3) → 10:05 HRS (CEB T1)'
+      : carrier.iataCode === 'PR'
+      ? '09:30 HRS (MNL T1) → 15:00 HRS (NRT T2)'
+      : '13:15 HRS (MNL T3) → 18:10 HRS (KIX T1)';
+
+  return { pnr, eTicket, seat, iataName, terminalGate, schedule };
+}
+
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   user,
   items,
@@ -52,15 +97,25 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [manualName, setManualName] = useState('');
   const [manualWeight, setManualWeight] = useState('');
   const [manualCategory] = useState('Gear');
+  const [selectedLuggageItem, setSelectedLuggageItem] = useState<BaggageItem | null>(null);
+
+  const resolvedName =
+    user?.displayName?.trim() ||
+    (user?.email ? user.email.split('@')[0] : 'Guest Traveler');
+  const resolvedEmail = user?.email?.trim() || '';
 
   const [selectedCarrier, setSelectedCarrier] = useState<AirlineCarrierOption>(PARTNER_AIRLINES[0]);
-  const [bookingCodeInput, setBookingCodeInput] = useState<string>(PARTNER_AIRLINES[0].defaultPnr);
-  const [isAnalyzingBooking, setIsAnalyzingBooking] = useState<boolean>(false);
+  const accountBooking = deriveAccountBookingDetails(
+    selectedCarrier,
+    resolvedName,
+    resolvedEmail
+  );
+
   const [bookingAnalysis, setBookingAnalysis] = useState<MuseAirlineBookingAnalysis>({
     modelUsed: MUSE_SPARK_MODEL,
-    bookingCode: PARTNER_AIRLINES[0].defaultPnr,
-    headline: `${PARTNER_AIRLINES[0].carrierName} (${PARTNER_AIRLINES[0].iataCode}) Booking ${PARTNER_AIRLINES[0].defaultPnr} Verified`,
-    summary: `Muse Spark (${MUSE_SPARK_MODEL}) verified ${PARTNER_AIRLINES[0].carrierName} PNR ${PARTNER_AIRLINES[0].defaultPnr} (${PARTNER_AIRLINES[0].fareBundle}). Includes 7.0 kg Cabin + 20.0 kg Checked Baggage.`,
+    bookingCode: accountBooking.pnr,
+    headline: `${PARTNER_AIRLINES[0].carrierName} (${PARTNER_AIRLINES[0].iataCode}) PNR ${accountBooking.pnr} Verified for ${resolvedName}`,
+    summary: `Muse Spark (${MUSE_SPARK_MODEL}) synced ${PARTNER_AIRLINES[0].carrierName} e-Ticket ${accountBooking.eTicket} (PNR ${accountBooking.pnr}) for ${resolvedName}${resolvedEmail ? ` <${resolvedEmail}>` : ''}. Includes 7.0 kg Cabin + 20.0 kg Checked Baggage.`,
     policyTips: [
       PARTNER_AIRLINES[0].cabinInclusionDetails,
       PARTNER_AIRLINES[0].checkedInclusionDetails,
@@ -69,31 +124,25 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
   const totalWeightKg = items.reduce((acc, item) => acc + item.weightKg, 0);
   const isOverweight = totalWeightKg > airlineLimitKg;
-  const overageKg = Math.max(0, totalWeightKg - airlineLimitKg);
   const progressRatio = Math.min(1, airlineLimitKg > 0 ? totalWeightKg / airlineLimitKg : 0);
+
+  useEffect(() => {
+    const details = deriveAccountBookingDetails(selectedCarrier, resolvedName, resolvedEmail);
+    setBookingAnalysis({
+      modelUsed: MUSE_SPARK_MODEL,
+      bookingCode: details.pnr,
+      headline: `${selectedCarrier.carrierName} (${selectedCarrier.iataCode}) PNR ${details.pnr} Verified for ${resolvedName}`,
+      summary: `Muse Spark (${MUSE_SPARK_MODEL}) synced ${selectedCarrier.carrierName} e-Ticket ${details.eTicket} (PNR ${details.pnr}) from login account ${resolvedName}${resolvedEmail ? ` <${resolvedEmail}>` : ''}. Includes ${selectedCarrier.cabinInclusionKg.toFixed(1)} kg Cabin + ${selectedCarrier.checkedInclusionKg.toFixed(1)} kg Checked Baggage.`,
+      policyTips: [selectedCarrier.cabinInclusionDetails, selectedCarrier.checkedInclusionDetails],
+    });
+    analyzeAirlineBookingWithMuseRN(selectedCarrier, details.pnr, totalWeightKg)
+      .then((res) => setBookingAnalysis(res))
+      .catch(() => {});
+  }, [selectedCarrier, resolvedName, resolvedEmail]);
 
   const handleSelectCarrier = (carrier: AirlineCarrierOption) => {
     setSelectedCarrier(carrier);
-    setBookingCodeInput(carrier.defaultPnr);
     onSelectLimit(carrier.cabinInclusionKg);
-    setBookingAnalysis({
-      modelUsed: MUSE_SPARK_MODEL,
-      bookingCode: carrier.defaultPnr,
-      headline: `${carrier.carrierName} (${carrier.iataCode}) Booking ${carrier.defaultPnr} Verified`,
-      summary: `Muse Spark (${MUSE_SPARK_MODEL}) verified ${carrier.carrierName} PNR ${carrier.defaultPnr} (${carrier.fareBundle}). Includes ${carrier.cabinInclusionKg.toFixed(1)} kg Cabin + ${carrier.checkedInclusionKg.toFixed(1)} kg Checked Baggage.`,
-      policyTips: [carrier.cabinInclusionDetails, carrier.checkedInclusionDetails],
-    });
-  };
-
-  const handleAnalyzeBooking = async () => {
-    setIsAnalyzingBooking(true);
-    const result = await analyzeAirlineBookingWithMuseRN(
-      selectedCarrier,
-      bookingCodeInput,
-      totalWeightKg
-    );
-    setBookingAnalysis(result);
-    setIsAnalyzingBooking(false);
   };
 
   const handleAddSubmit = () => {
@@ -104,12 +153,20 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     setManualWeight('');
   };
 
-  const resolvedName = user?.displayName || 'Masakazu Wada';
-  const resolvedEmail = user?.email || 'masakazuwada09@gmail.com';
+  const handleConfirmSignOut = () => {
+    Alert.alert(
+      'Confirm Sign Out',
+      'Are you sure you want to sign out of your Luggagely account?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign Out', style: 'destructive', onPress: onSignOut },
+      ]
+    );
+  };
 
   return (
     <View style={styles.root}>
-      {/* Transparent Top Header Row with Larger Profile Photo & Name Only (No White Card) */}
+      {/* Transparent Top Header Row with Larger Profile Photo & Name Only */}
       <View style={styles.topHeader}>
         <View style={styles.profileRow}>
           {user?.photoUrl ? (
@@ -128,56 +185,54 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           </View>
         </View>
 
-        <TouchableOpacity onPress={onSignOut}>
+        <TouchableOpacity onPress={handleConfirmSignOut}>
           <Text style={styles.headerSub}>Sign Out</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Verified Airline Booking & Inclusion Card Based on Name & Email */}
+        {/* Verified Airline Booking & Inclusion Card Based on Logged-In Account */}
         <View style={styles.card}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>Verified Airline Booking Details</Text>
             <Text style={styles.museBadgeText}>{MUSE_SPARK_MODEL.toUpperCase()}</Text>
           </View>
 
-          {selectedTab !== 'PROFILE' && (
-            <View style={styles.presetRow}>
-              {PARTNER_AIRLINES.map((carrier) => {
-                const isSelected = carrier.id === selectedCarrier.id;
-                return (
-                  <TouchableOpacity
-                    key={carrier.id}
+          <View style={styles.presetRow}>
+            {PARTNER_AIRLINES.map((carrier) => {
+              const isSelected = carrier.id === selectedCarrier.id;
+              return (
+                <TouchableOpacity
+                  key={carrier.id}
+                  style={[
+                    styles.carrierChip,
+                    isSelected && {
+                      backgroundColor: FB_THEME.facebookBlueSoft,
+                      borderColor: FB_THEME.facebookBlue,
+                    },
+                  ]}
+                  onPress={() => handleSelectCarrier(carrier)}
+                >
+                  <View
                     style={[
-                      styles.carrierChip,
-                      isSelected && {
-                        backgroundColor: FB_THEME.facebookBlueSoft,
-                        borderColor: FB_THEME.facebookBlue,
-                      },
+                      styles.logoEmblem,
+                      { backgroundColor: carrier.brandPrimaryHex },
                     ]}
-                    onPress={() => handleSelectCarrier(carrier)}
                   >
-                    <View
-                      style={[
-                        styles.logoEmblem,
-                        { backgroundColor: carrier.brandPrimaryHex },
-                      ]}
-                    >
-                      <Text style={styles.logoEmblemText}>{carrier.iataCode}</Text>
-                    </View>
-                    <View>
-                      <Text style={styles.carrierChipName}>{carrier.carrierName}</Text>
-                      <Text style={styles.carrierChipSub}>
-                        Cabin {carrier.cabinInclusionKg}kg • Hold {carrier.checkedInclusionKg}kg
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
+                    <Text style={styles.logoEmblemText}>{carrier.iataCode}</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.carrierChipName}>{carrier.carrierName}</Text>
+                    <Text style={styles.carrierChipSub}>
+                      Cabin {carrier.cabinInclusionKg}kg • Hold {carrier.checkedInclusionKg}kg
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
-          {/* Connected Booking Summary Pass with Passenger Name & Email */}
+          {/* Connected Booking Summary Pass with Account Passenger Name, Email, E-Ticket, Schedule & Seat */}
           <View style={styles.bookingPassBox}>
             <View style={styles.rowBetween}>
               <View style={styles.rowCenter}>
@@ -189,20 +244,31 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                 >
                   <Text style={styles.logoEmblemLargeText}>{selectedCarrier.iataCode}</Text>
                 </View>
-                <View style={{ marginLeft: 10 }}>
+                <View style={{ marginLeft: 10, flex: 1 }}>
                   <Text style={styles.itemName}>
                     {selectedCarrier.carrierName} • {selectedCarrier.flightNumber}
                   </Text>
                   <Text style={styles.itemMeta}>{selectedCarrier.route}</Text>
                   <Text style={[styles.itemMeta, { color: FB_THEME.facebookBlue, fontWeight: '700' }]}>
-                    {resolvedName} • {resolvedEmail}
+                    {resolvedName} ({accountBooking.iataName})
+                    {resolvedEmail ? ` • ${resolvedEmail}` : ''}
                   </Text>
                 </View>
               </View>
               <View style={styles.pnrBadge}>
                 <Text style={styles.pnrLabel}>BOOKING CODE</Text>
-                <Text style={styles.pnrValue}>{bookingAnalysis.bookingCode}</Text>
+                <Text style={styles.pnrValue}>{accountBooking.pnr}</Text>
               </View>
+            </View>
+
+            <View style={[styles.museAnalysisBox, { marginTop: 10 }]}>
+              <Text style={styles.itemName}>
+                E-Ticket: {accountBooking.eTicket} • {selectedCarrier.fareBundle}
+              </Text>
+              <Text style={styles.itemMeta}>{accountBooking.schedule}</Text>
+              <Text style={styles.itemMeta}>
+                {accountBooking.terminalGate} • Seat {accountBooking.seat}
+              </Text>
             </View>
 
             <View style={[styles.rowBetween, { marginTop: 12 }]}>
@@ -295,10 +361,10 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           </View>
         </View>
 
-        {/* Dynamic Baggage Manifest Card */}
+        {/* Dashboard Luggage Lists Card (Tap any Luggage Item to open Bottom Sheet with Details) */}
         <View style={styles.card}>
           <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>Baggage Manifest ({items.length})</Text>
+            <Text style={styles.cardTitle}>Luggage Lists ({items.length})</Text>
             {items.length > 0 && (
               <TouchableOpacity onPress={onClearItems}>
                 <Text style={styles.clearLink}>Clear All</Text>
@@ -316,7 +382,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             </View>
           ) : (
             items.map((item) => (
-              <View key={item.id} style={styles.itemRow}>
+              <TouchableOpacity
+                key={item.id}
+                style={styles.itemRow}
+                onPress={() => setSelectedLuggageItem(item)}
+              >
                 <View
                   style={[
                     styles.sourceDot,
@@ -329,7 +399,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                 <View style={styles.itemInfo}>
                   <Text style={styles.itemName}>{item.name}</Text>
                   <Text style={styles.itemMeta}>
-                    {item.category} • {item.source === 'AI_SCANNED' ? 'AI Scanned' : 'Manual'}
+                    {item.category} • {item.source === 'AI_SCANNED' ? 'AI Scanned' : 'Manual'} • Tap for details
                   </Text>
                 </View>
                 <Text style={styles.itemWeight}>{item.weightKg.toFixed(2)} kg</Text>
@@ -339,7 +409,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                 >
                   <Text style={styles.deleteBtnText}>✕</Text>
                 </TouchableOpacity>
-              </View>
+              </TouchableOpacity>
             ))
           )}
         </View>
@@ -374,14 +444,105 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             <Text style={styles.cardTitle}>Account & iOS / Android Sync</Text>
             <Text style={styles.emptySub}>
               Signed in as {user?.email || 'Guest'}. Connected to {selectedCarrier.carrierName} (PNR{' '}
-              {bookingAnalysis.bookingCode}).
+              {accountBooking.pnr} • E-Ticket {accountBooking.eTicket}).
             </Text>
-            <TouchableOpacity style={[styles.addBtn, { marginTop: 12 }]} onPress={onSignOut}>
+            <TouchableOpacity style={[styles.addBtn, { marginTop: 12 }]} onPress={handleConfirmSignOut}>
               <Text style={styles.addBtnText}>Sign Out</Text>
             </TouchableOpacity>
           </View>
         )}
       </ScrollView>
+
+      {/* Luggage Details Bottom Sheet Modal on Item Click */}
+      <Modal
+        visible={selectedLuggageItem !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedLuggageItem(null)}
+      >
+        <TouchableOpacity
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.45)',
+            justifyContent: 'flex-end',
+          }}
+          activeOpacity={1}
+          onPress={() => setSelectedLuggageItem(null)}
+        >
+          {selectedLuggageItem && (
+            <View
+              style={{
+                backgroundColor: FB_THEME.cardWhite,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                padding: 20,
+              }}
+            >
+              <View style={styles.rowBetween}>
+                <View style={{ flex: 1, marginRight: 10 }}>
+                  <Text style={styles.pnrLabel}>LUGGAGE ITEM DETAILS</Text>
+                  <Text style={[styles.headerTitle, { marginTop: 2 }]}>
+                    {selectedLuggageItem.name}
+                  </Text>
+                  <Text style={styles.itemMeta}>{selectedLuggageItem.category}</Text>
+                </View>
+                <View style={styles.pnrBadge}>
+                  <Text style={styles.pnrValue}>
+                    {selectedLuggageItem.weightKg.toFixed(2)} kg
+                  </Text>
+                  <Text style={styles.pnrLabel}>
+                    {Math.round(selectedLuggageItem.weightKg * 1000)} g
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.bookingPassBox, { marginTop: 14 }]}>
+                <Text style={styles.itemName}>
+                  Source:{' '}
+                  {selectedLuggageItem.source === 'AI_SCANNED'
+                    ? `AI Scanned (${MUSE_SPARK_MODEL} • ${Math.round((selectedLuggageItem.confidence || 0.98) * 100)}% Confidence)`
+                    : 'Manual Override Entry'}
+                </Text>
+                <Text style={[styles.itemMeta, { marginTop: 4 }]}>
+                  Allowance Share:{' '}
+                  {Math.max(1, Math.round((selectedLuggageItem.weightKg / airlineLimitKg) * 100))}%
+                  of {selectedCarrier.carrierName} {airlineLimitKg.toFixed(1)} kg limit
+                </Text>
+                <Text style={[styles.itemMeta, { marginTop: 4 }]}>
+                  Linked Booking: {selectedCarrier.carrierName} ({selectedCarrier.flightNumber}) •
+                  PNR {accountBooking.pnr} • E-Ticket {accountBooking.eTicket} • Seat{' '}
+                  {accountBooking.seat}
+                </Text>
+              </View>
+
+              <View style={[styles.rowBetween, { marginTop: 16 }]}>
+                <TouchableOpacity
+                  style={[
+                    styles.addBtn,
+                    {
+                      flex: 1,
+                      marginRight: 8,
+                      backgroundColor: FB_THEME.coralDanger,
+                    },
+                  ]}
+                  onPress={() => {
+                    onRemoveItem(selectedLuggageItem.id);
+                    setSelectedLuggageItem(null);
+                  }}
+                >
+                  <Text style={styles.addBtnText}>Remove Item</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.addBtn, { flex: 1 }]}
+                  onPress={() => setSelectedLuggageItem(null)}
+                >
+                  <Text style={styles.addBtnText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 };

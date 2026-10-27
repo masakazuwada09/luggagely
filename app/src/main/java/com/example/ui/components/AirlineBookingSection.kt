@@ -248,7 +248,12 @@ fun ConnectedAirlineDashboardBanner(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${booking.passengerName} • ${booking.passengerEmail}",
+                            text = buildString {
+                                append("${booking.passengerName} (${booking.iataPassengerName})")
+                                if (booking.passengerEmail.isNotBlank()) {
+                                    append(" • ${booking.passengerEmail}")
+                                }
+                            },
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -279,7 +284,7 @@ fun ConnectedAirlineDashboardBanner(
                 }
             }
 
-            // Real Booking Metadata Strip (E-Ticket, Seat, Terminal/Gate)
+            // Real Booking Metadata Strip (E-Ticket, Schedule, Seat, Terminal/Gate, Fare Bundle)
             Surface(
                 color = DashboardSurfaceLight,
                 shape = RoundedCornerShape(10.dp),
@@ -294,13 +299,25 @@ fun ConnectedAirlineDashboardBanner(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "E-TICKET: ${booking.eTicketNumber}",
+                            text = "E-TICKET: ${booking.eTicketNumber} • ${booking.fareBundle}",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontFamily = JetBrainsMonoFontFamily,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 10.sp,
                                 color = TextPrimary
-                            )
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${booking.departureSchedule}",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = TextPrimary
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "${booking.terminalGate} • Seat ${booking.seatNumber}",
@@ -441,6 +458,7 @@ fun AirlineBookingProfileCard(
     uiState: BaggageGuardUiState,
     passengerName: String?,
     passengerEmail: String? = null,
+    onSelectCarrier: (AirlineCarrier) -> Unit = {},
     onBookingCodeChange: (String) -> Unit,
     onConnectAndAnalyzeBooking: (String?, String?) -> Unit,
     onApplyAllowanceMode: (Boolean) -> Unit,
@@ -493,7 +511,11 @@ fun AirlineBookingProfileCard(
                             color = TextPrimary
                         )
                         Text(
-                            text = "Matched to $resolvedName ($resolvedEmail) • ${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}",
+                            text = buildString {
+                                append("Matched to $resolvedName")
+                                if (resolvedEmail.isNotBlank()) append(" ($resolvedEmail)")
+                                append(" • ${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}")
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = TextSecondary
                         )
@@ -514,6 +536,49 @@ fun AirlineBookingProfileCard(
                         color = FacebookBlue,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
+                }
+            }
+
+            // Carrier Selector Pills inside Profile Booking Card
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AirlineCarrier.entries.forEach { option ->
+                    val selected = option == booking.carrier
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable { onSelectCarrier(option) }
+                            .testTag("profile_carrier_chip_${option.id}"),
+                        color = if (selected) FacebookBlue else DashboardSurfaceLight,
+                        shape = RoundedCornerShape(50),
+                        border = BorderStroke(1.dp, if (selected) FacebookBlue else DashboardBorderLight)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (selected) Color.White else Color(option.brandPrimaryHex)
+                                    )
+                            )
+                            Text(
+                                text = "${option.carrierName} (${option.iataCode})",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (selected) Color.White else TextPrimary
+                            )
+                        }
+                    }
                 }
             }
 

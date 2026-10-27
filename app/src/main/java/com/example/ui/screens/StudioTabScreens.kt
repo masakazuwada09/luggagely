@@ -893,6 +893,7 @@ fun ProfileTabScreen(
     userLabel: String?,
     userEmail: String? = null,
     userPhotoUrl: String? = null,
+    onSelectCarrier: (AirlineCarrier) -> Unit = {},
     onBookingCodeChange: (String) -> Unit = {},
     onConnectAndAnalyzeBooking: (String?, String?) -> Unit = { _, _ -> },
     onApplyAllowanceMode: (Boolean) -> Unit = {},
@@ -1064,6 +1065,7 @@ fun ProfileTabScreen(
                 uiState = uiState,
                 passengerName = resolvedName,
                 passengerEmail = resolvedEmail,
+                onSelectCarrier = onSelectCarrier,
                 onBookingCodeChange = onBookingCodeChange,
                 onConnectAndAnalyzeBooking = onConnectAndAnalyzeBooking,
                 onApplyAllowanceMode = onApplyAllowanceMode

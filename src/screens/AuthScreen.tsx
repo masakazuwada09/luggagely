@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, Image, StyleSheet, ActivityIndicator } from 'react-native';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { getAuth, GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
 import Icon from 'react-native-ico-social-media';
 import { FB_THEME } from '../types/baggage';
 
@@ -15,93 +17,112 @@ interface AuthScreenProps {
   onContinueAsGuest: () => void;
 }
 
+const CIRCLING_OFFSETS = [
+  { top: 0, left: 108 },
+  { top: 54, left: 200 },
+  { top: 162, left: 200 },
+  { top: 216, left: 108 },
+  { top: 162, left: 16 },
+  { top: 54, left: 16 },
+];
+
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   onSignInSuccess,
   onContinueAsGuest,
 }) => {
-  const [isSignUpMode, setIsSignUpMode] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const handleGoogleLogin = () => {
-    onSignInSuccess({
-      uid: 'ios-google-user',
-      displayName: 'Masakazu Wada',
-      email: 'masakazuwada09@gmail.com',
-      photoUrl: 'https://lh3.googleusercontent.com/a/default-user=s96-c',
-    });
-  };
+  const performRealOAuthSignIn = async () => {
+    setIsLoading(true);
+    setAuthError(null);
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const signInResponse = await GoogleSignin.signIn();
+      const idToken = (signInResponse as any)?.data?.idToken ?? (signInResponse as any)?.idToken;
+      if (idToken) {
+        const auth = getAuth();
+        const credential = GoogleAuthProvider.credential(idToken);
+        const userCredential = await signInWithCredential(auth, credential);
+        const fbUser = userCredential.user;
+        onSignInSuccess({
+          uid: fbUser.uid,
+          displayName:
+            fbUser.displayName ||
+            (fbUser.email ? fbUser.email.split('@')[0] : 'Signed-In Traveler'),
+          email: fbUser.email || '',
+          photoUrl: fbUser.photoURL,
+        });
+        return;
+      }
 
-  const handleFacebookLogin = () => {
-    onSignInSuccess({
-      uid: 'ios-facebook-user',
-      displayName: 'Masakazu Wada',
-      email: 'masakazuwada09@gmail.com',
-      photoUrl: 'https://lh3.googleusercontent.com/a/default-user=s96-c',
-    });
+      const profileUser = (signInResponse as any)?.data?.user ?? (signInResponse as any)?.user;
+      if (profileUser?.email) {
+        onSignInSuccess({
+          uid: profileUser.id || `oauth-${Date.now()}`,
+          displayName: profileUser.name || profileUser.email.split('@')[0],
+          email: profileUser.email,
+          photoUrl: profileUser.photo || null,
+        });
+      } else {
+        setAuthError('Sign-in was cancelled or returned no account profile.');
+      }
+    } catch (err: any) {
+      setAuthError(err?.message || 'Unable to complete sign-in. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
     <View style={styles.container}>
-      <View style={styles.topRow}>
-        <View style={styles.modeTogglePill}>
-          <TouchableOpacity
-            style={[styles.modeTab, !isSignUpMode && styles.modeTabActive]}
-            onPress={() => setIsSignUpMode(false)}
-          >
-            <Text style={[styles.modeTabText, !isSignUpMode && styles.modeTabTextActive]}>
-              Log In
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modeTab, isSignUpMode && styles.modeTabActive]}
-            onPress={() => setIsSignUpMode(true)}
-          >
-            <Text style={[styles.modeTabText, isSignUpMode && styles.modeTabTextActive]}>
-              Sign Up
-            </Text>
-          </TouchableOpacity>
+      <View style={styles.heroCenter}>
+        <View style={styles.orbitContainer}>
+          {CIRCLING_OFFSETS.map((pos, idx) => (
+            <View
+              key={idx}
+              style={[styles.orbitItem, { top: pos.top, left: pos.left }]}
+            />
+          ))}
+          <Image
+            source={require('../../public/assets/aistudio/Luggagely_cc4b88fe.png')}
+            style={styles.centeredLogo}
+            resizeMode="contain"
+          />
         </View>
-      </View>
 
-      <View style={styles.card}>
-        <Text style={styles.kicker}>
-          {isSignUpMode ? 'CREATE ACCOUNT' : 'WELCOME BACK'}
-        </Text>
-        <Text style={styles.title}>
-          {isSignUpMode
-            ? 'Create your Luggagely account'
-            : 'Ready to keep track of your luggage?'}
-        </Text>
-        <Text style={styles.subtitle}>
-          {isSignUpMode
-            ? 'Sign up with your Google account for automatic cloud manifest backup and airline booking lookup.'
-            : 'Please log in to access your account and synced airline baggage allowance.'}
-        </Text>
-
-        <View style={styles.featureSurface}>
-          <Text style={styles.featureTitle}>
-            {isSignUpMode
-              ? 'Instant One-Tap Google Account Registration'
-              : 'Cloud Sync & Real-Time SAM 3.1 Manifest'}
+        <View style={styles.cloudSyncBlock}>
+          <Text style={styles.cloudSyncTitle}>
+            Cloud Sync & Real-Time SAM 3.1 Manifest
           </Text>
-          <Text style={styles.featureBody}>
+          <Text style={styles.cloudSyncBody}>
             Your scanned gear weights, live airline PNR bookings, and personal bag shifts stay synced securely with Google Sign-In.
           </Text>
+          {authError ? <Text style={styles.errorText}>{authError}</Text> : null}
         </View>
       </View>
 
       <View style={styles.actionsColumn}>
         <TouchableOpacity
           style={styles.googleBtn}
-          onPress={handleGoogleLogin}
+          onPress={performRealOAuthSignIn}
+          disabled={isLoading}
           activeOpacity={0.85}
         >
-          <Icon name="google-plus" height="22" width="22" />
-          <Text style={styles.googleBtnText}>Google Sign in</Text>
+          {isLoading ? (
+            <ActivityIndicator color={FB_THEME.facebookBlue} />
+          ) : (
+            <>
+              <Icon name="google-plus" height="22" width="22" />
+              <Text style={styles.googleBtnText}>Google Sign in</Text>
+            </>
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.facebookBtn}
-          onPress={handleFacebookLogin}
+          onPress={performRealOAuthSignIn}
+          disabled={isLoading}
           activeOpacity={0.85}
         >
           <Icon name="facebook" height="22" width="22" color="#FFFFFF" />
@@ -126,80 +147,54 @@ const styles = StyleSheet.create({
     backgroundColor: FB_THEME.feedGrayBg,
     justifyContent: 'space-between',
     paddingHorizontal: 24,
-    paddingVertical: 24,
+    paddingVertical: 32,
   },
-  topRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
+  heroCenter: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  modeTogglePill: {
-    flexDirection: 'row',
+  orbitContainer: {
+    width: 260,
+    height: 260,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  orbitItem: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: FB_THEME.cardWhite,
-    borderRadius: 999,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: FB_THEME.borderLight,
+    opacity: 0.35,
   },
-  modeTab: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 999,
+  centeredLogo: {
+    height: 124,
+    width: 88,
   },
-  modeTabActive: {
-    backgroundColor: FB_THEME.facebookBlue,
+  cloudSyncBlock: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
   },
-  modeTabText: {
-    fontSize: 13,
+  cloudSyncTitle: {
+    fontSize: 18,
     fontWeight: '700',
-    color: FB_THEME.textSecondary,
-  },
-  modeTabTextActive: {
-    color: FB_THEME.cardWhite,
-  },
-  card: {
-    backgroundColor: FB_THEME.cardWhite,
-    borderRadius: 20,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: FB_THEME.borderLight,
-  },
-  kicker: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: FB_THEME.facebookBlue,
+    color: FB_THEME.textPrimary,
+    textAlign: 'center',
     marginBottom: 8,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: FB_THEME.textPrimary,
-    lineHeight: 36,
-    marginBottom: 10,
-  },
-  subtitle: {
+  cloudSyncBody: {
     fontSize: 14,
     color: FB_THEME.textSecondary,
     lineHeight: 20,
-    marginBottom: 18,
+    textAlign: 'center',
   },
-  featureSurface: {
-    backgroundColor: FB_THEME.surfaceLight,
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: FB_THEME.borderLight,
-  },
-  featureTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: FB_THEME.textPrimary,
-    marginBottom: 6,
-  },
-  featureBody: {
+  errorText: {
+    marginTop: 10,
     fontSize: 13,
-    color: FB_THEME.textSecondary,
-    lineHeight: 19,
+    color: FB_THEME.crimsonAlert,
+    textAlign: 'center',
   },
   actionsColumn: {
     gap: 12,
@@ -212,8 +207,6 @@ const styles = StyleSheet.create({
     backgroundColor: FB_THEME.cardWhite,
     borderRadius: 14,
     paddingVertical: 16,
-    borderWidth: 1,
-    borderColor: FB_THEME.borderLight,
   },
   googleBtnText: {
     color: FB_THEME.textPrimary,
@@ -239,8 +232,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: FB_THEME.borderLight,
   },
   guestBtnText: {
     color: FB_THEME.textSecondary,

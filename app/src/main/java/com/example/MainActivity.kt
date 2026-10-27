@@ -73,19 +73,48 @@ private fun LuggageTrackerAppRoot() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
+    val sessionPrefs = remember(context) {
+        context.getSharedPreferences("luggagely_session_prefs", android.content.Context.MODE_PRIVATE)
+    }
 
     val auth = remember { Firebase.auth }
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     val credentialPhotoUrl by googleProfilePhotoUrlFlow.collectAsStateWithLifecycle()
 
-    var stage by rememberSaveable { mutableStateOf(AppStage.INTRO) }
-    var isGuestSession by rememberSaveable { mutableStateOf(false) }
+    var isGuestSession by rememberSaveable {
+        mutableStateOf(sessionPrefs.getBoolean("is_guest_session", false))
+    }
 
-    // If user authenticates with Google on the AUTH screen, advance to STUDIO
-    LaunchedEffect(currentUser) {
-        if (currentUser != null && stage == AppStage.AUTH) {
-            stage = AppStage.STUDIO
+    var stage by rememberSaveable {
+        val initialStage = when {
+            auth.currentUser != null -> AppStage.STUDIO
+            sessionPrefs.getBoolean("is_guest_session", false) -> AppStage.STUDIO
+            sessionPrefs.getString("last_stage", null) == AppStage.STUDIO.name && auth.currentUser != null -> AppStage.STUDIO
+            sessionPrefs.getString("last_stage", null) == AppStage.AUTH.name -> AppStage.AUTH
+            else -> AppStage.INTRO
         }
+        mutableStateOf(initialStage)
+    }
+
+    // Whenever a user is signed in (including after returning from background or credential picker),
+    // always redirect directly to STUDIO (Dashboard) and never show INTRO.
+    LaunchedEffect(currentUser) {
+        if (currentUser != null) {
+            isGuestSession = false
+            stage = AppStage.STUDIO
+            sessionPrefs.edit()
+                .putBoolean("is_guest_session", false)
+                .putString("last_stage", AppStage.STUDIO.name)
+                .apply()
+        }
+    }
+
+    // Persist current stage so backgrounding/reopening preserves place
+    LaunchedEffect(stage, isGuestSession) {
+        sessionPrefs.edit()
+            .putBoolean("is_guest_session", isGuestSession)
+            .putString("last_stage", stage.name)
+            .apply()
     }
 
     Crossfade(targetState = stage, label = "root_stage_transition") { currentStage ->
@@ -135,9 +164,13 @@ private fun LuggageTrackerAppRoot() {
 
             AppStage.STUDIO -> {
                 BackHandler {
-                    stage = AppStage.AUTH
+                    if (currentUser == null) {
+                        isGuestSession = false
+                        stage = AppStage.AUTH
+                    }
                 }
-                val activeUid = currentUser?.uid
+                val activeUser = currentUser
+                val activeUid = activeUser?.uid
                 if (activeUid != null) {
                     // Authenticated session: instantiate ViewModel backed by Firestore BaggageRepository
                     val studioViewModel: BaggageGuardViewModel = viewModel(
@@ -154,12 +187,14 @@ private fun LuggageTrackerAppRoot() {
                             }
                         }
                     )
-                    val displayLabel = currentUser?.displayName?.takeIf { it.isNotBlank() }
-                        ?: currentUser?.email?.substringBefore("@")?.replace(".", " ")?.replaceFirstChar { it.uppercase() }
-                        ?: "Masakazu Wada"
-                    val emailAddress = currentUser?.email?.takeIf { it.isNotBlank() }
-                        ?: "masakazuwada09@gmail.com"
-                    val photoUrl = currentUser?.photoUrl?.toString()?.takeIf { it.isNotBlank() }
+                    val displayLabel = activeUser.displayName?.takeIf { it.isNotBlank() }
+                        ?: activeUser.email?.substringBefore("@")
+                            ?.replace(".", " ")
+                            ?.replace("_", " ")
+                            ?.replaceFirstChar { it.uppercase() }
+                        ?: "Signed-In Traveler"
+                    val emailAddress = activeUser.email?.takeIf { it.isNotBlank() } ?: ""
+                    val photoUrl = activeUser.photoUrl?.toString()?.takeIf { it.isNotBlank() }
                         ?: credentialPhotoUrl
 
                     BaggageGuardStudio(
@@ -173,6 +208,10 @@ private fun LuggageTrackerAppRoot() {
                                 credentialManager = credentialManager,
                                 onSignOutComplete = {
                                     isGuestSession = false
+                                    sessionPrefs.edit()
+                                        .putBoolean("is_guest_session", false)
+                                        .putString("last_stage", AppStage.AUTH.name)
+                                        .apply()
                                     stage = AppStage.AUTH
                                 },
                                 scope = coroutineScope
@@ -184,11 +223,16 @@ private fun LuggageTrackerAppRoot() {
                     val guestViewModel: BaggageGuardViewModel = viewModel(key = "guest_session")
                     BaggageGuardStudio(
                         viewModel = guestViewModel,
-                        userLabel = if (isGuestSession) "Masakazu Wada" else "Log In",
-                        userEmail = "masakazuwada09@gmail.com",
+                        userLabel = "Guest Traveler",
+                        userEmail = "",
                         userPhotoUrl = null,
                         isGoogleSignedIn = false,
                         onNavigateBackOrSignOut = {
+                            isGuestSession = false
+                            sessionPrefs.edit()
+                                .putBoolean("is_guest_session", false)
+                                .putString("last_stage", AppStage.AUTH.name)
+                                .apply()
                             stage = AppStage.AUTH
                         }
                     )

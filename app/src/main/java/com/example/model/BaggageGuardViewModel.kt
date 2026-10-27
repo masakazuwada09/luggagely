@@ -208,7 +208,7 @@ data class AirlineBookingConnection(
         fun formatIataPassenger(name: String, email: String): String {
             val clean = name.trim().ifBlank {
                 email.substringBefore("@").replace(".", " ").replace("_", " ").trim()
-            }.ifBlank { "Masakazu Wada" }
+            }.ifBlank { "Guest Traveler" }
             val parts = clean.split("\\s+".toRegex()).filter { it.isNotBlank() }
             return if (parts.size >= 2) {
                 "${parts.last().uppercase()}/${parts.dropLast(1).joinToString(" ").uppercase()}"
@@ -242,19 +242,36 @@ data class AirlineBookingConnection(
             return "$prefix-$num"
         }
 
+        fun deriveSeatForUser(carrier: AirlineCarrier, name: String, email: String): String {
+            val seed = "${name.trim().lowercase()}|${email.trim().lowercase()}|seat|${carrier.id}"
+            val hash = kotlin.math.abs(seed.hashCode())
+            val row = (hash % 24) + 4
+            val cols = listOf("A", "C", "D", "F", "K")
+            val col = cols[hash % cols.size]
+            val cabinZone = when (carrier) {
+                AirlineCarrier.CEBU_PACIFIC -> "CEB Plus Cabin"
+                AirlineCarrier.PHILIPPINE_AIRLINES -> "Economy Fiesta"
+                AirlineCarrier.AIRASIA -> "Hot Seat / Quiet Zone"
+            }
+            return "$row$col ($cabinZone)"
+        }
+
         fun defaultFor(
             carrier: AirlineCarrier,
             bookingCode: String? = null,
-            passengerName: String = "Masakazu Wada",
-            passengerEmail: String = "masakazuwada09@gmail.com",
+            passengerName: String = "Guest Traveler",
+            passengerEmail: String = "",
             packedWeightKg: Double = 0.0
         ): AirlineBookingConnection {
-            val cleanName = passengerName.trim().ifBlank { "Masakazu Wada" }
-            val cleanEmail = passengerEmail.trim().ifBlank { "masakazuwada09@gmail.com" }
+            val cleanName = passengerName.trim().ifBlank {
+                passengerEmail.substringBefore("@").replace(".", " ").replace("_", " ").trim()
+            }.ifBlank { "Guest Traveler" }
+            val cleanEmail = passengerEmail.trim()
             val resolvedPnr = bookingCode?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
                 ?: derivePnrForUser(carrier, cleanName, cleanEmail)
             val iataPassenger = formatIataPassenger(cleanName, cleanEmail)
             val eTicket = deriveETicketForUser(carrier, cleanName, cleanEmail)
+            val seatNumber = deriveSeatForUser(carrier, cleanName, cleanEmail)
 
             val schedule = when (carrier) {
                 AirlineCarrier.CEBU_PACIFIC -> "08:40 HRS (MNL T3) → 10:05 HRS (CEB T1) • GATE 114"
@@ -266,12 +283,8 @@ data class AirlineBookingConnection(
                 AirlineCarrier.PHILIPPINE_AIRLINES -> "NAIA Terminal 1 • Gate 9 (Mabuhay Lane)"
                 AirlineCarrier.AIRASIA -> "NAIA Terminal 3 • Gate 108 (Fast-Pass)"
             }
-            val seatNumber = when (carrier) {
-                AirlineCarrier.CEBU_PACIFIC -> "14A (Window • Front Cabin)"
-                AirlineCarrier.PHILIPPINE_AIRLINES -> "22K (Window • Economy Fiesta)"
-                AirlineCarrier.AIRASIA -> "11F (Window • Quiet Zone)"
-            }
 
+            val accountTag = if (cleanEmail.isNotBlank()) "$cleanName <$cleanEmail>" else cleanName
             val formattedPacked = BaggageGuardUiState.formatWeight(packedWeightKg)
             val cabinMargin = BaggageGuardUiState.formatWeight((carrier.cabinInclusionKg - packedWeightKg).coerceAtLeast(0.0))
             val isOverCabin = packedWeightKg > carrier.cabinInclusionKg
@@ -282,27 +295,27 @@ data class AirlineBookingConnection(
             }
             val summary = when (carrier) {
                 AirlineCarrier.CEBU_PACIFIC ->
-                    "Muse Spark (${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}) matched Cebu Pacific e-Ticket $eTicket (PNR $resolvedPnr) for $cleanName <$cleanEmail>. Includes 7.0 kg Hand-Carry + 20.0 kg CEB Prepaid Checked Baggage (packed: $formattedPacked kg)."
+                    "Muse Spark (${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}) synced Cebu Pacific e-Ticket $eTicket (PNR $resolvedPnr) from login account $accountTag. Includes 7.0 kg Hand-Carry + 20.0 kg CEB Prepaid Checked Baggage (packed: $formattedPacked kg)."
                 AirlineCarrier.PHILIPPINE_AIRLINES ->
-                    "Muse Spark (${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}) matched Philippine Airlines e-Ticket $eTicket (PNR $resolvedPnr) for $cleanName <$cleanEmail>. Includes 7.0 kg Cabin Carry-On + 2×23.0 kg Free Baggage Allowance (packed: $formattedPacked kg)."
+                    "Muse Spark (${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}) synced Philippine Airlines e-Ticket $eTicket (PNR $resolvedPnr) from login account $accountTag. Includes 7.0 kg Cabin Carry-On + 2×23.0 kg Free Baggage Allowance (packed: $formattedPacked kg)."
                 AirlineCarrier.AIRASIA ->
-                    "Muse Spark (${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}) matched AirAsia e-Ticket $eTicket (PNR $resolvedPnr) for $cleanName <$cleanEmail>. Includes 7.0 kg 2-piece Cabin Allowance + 20.0 kg Value Pack Checked Baggage (packed: $formattedPacked kg)."
+                    "Muse Spark (${MuseSparkMetaClient.MUSE_SPARK_MODEL_ID}) synced AirAsia e-Ticket $eTicket (PNR $resolvedPnr) from login account $accountTag. Includes 7.0 kg 2-piece Cabin Allowance + 20.0 kg Value Pack Checked Baggage (packed: $formattedPacked kg)."
             }
             val tips = when (carrier) {
                 AirlineCarrier.CEBU_PACIFIC -> listOf(
-                    "Cebu Pacific (5J): Keep lithium power banks & laptops in your 7.0 kg cabin bag or small under-seat bag.",
+                    "Cebu Pacific (5J): Account booking $resolvedPnr ($accountTag) includes 7.0 kg cabin carry-on + 1 under-seat personal bag.",
                     "CEB Prepaid 20.0 kg Checked Baggage covers liquids >100ml and heavy footwear under e-Ticket $eTicket.",
-                    "Gate check fees apply if carry-on exceeds 7.0 kg at NAIA T3 Gate 114."
+                    "Assigned Seat $seatNumber • Boarding at $terminalGate."
                 )
                 AirlineCarrier.PHILIPPINE_AIRLINES -> listOf(
-                    "Philippine Airlines (PR): Economy Fiesta e-Ticket $eTicket includes 2 pieces up to 23.0 kg each in checked hold.",
+                    "Philippine Airlines (PR): Account booking $resolvedPnr ($accountTag) e-Ticket $eTicket includes 2 pieces up to 23.0 kg each in checked hold.",
                     "Cabin carry-on strictly max 7.0 kg (56×36×23cm) plus 1 personal laptop sleeve or handbag.",
-                    "Mabuhay Miles priority baggage tag linked to $cleanEmail at Manila Terminal 1."
+                    "Assigned Seat $seatNumber • Priority boarding at $terminalGate."
                 )
                 AirlineCarrier.AIRASIA -> listOf(
-                    "AirAsia (Z2): Combined weight of main cabin bag + small laptop bag must not exceed 7.0 kg.",
-                    "Value Pack e-Ticket $eTicket includes 20.0 kg checked baggage linked to $cleanEmail.",
-                    "Fast-Pass Xtra Carry-On (14.0 kg) upgrade available up to 4 hours before departure."
+                    "AirAsia (Z2): Account booking $resolvedPnr ($accountTag) combined cabin bag + small laptop bag max 7.0 kg.",
+                    "Value Pack e-Ticket $eTicket includes 20.0 kg checked baggage.",
+                    "Assigned Seat $seatNumber • Boarding at $terminalGate."
                 )
             }
             return AirlineBookingConnection(
@@ -485,7 +498,7 @@ class BaggageGuardViewModel(
 
     private val _uiState = MutableStateFlow(
         BaggageGuardUiState(
-            items = emptyList(),
+            items = buildRigItems(GearRigPreset.NOMAD_CABIN),
             selectedPreset = AirlinePreset.CABIN_7KG,
             selectedRig = GearRigPreset.NOMAD_CABIN
         )
@@ -546,9 +559,13 @@ class BaggageGuardViewModel(
                 }
                 .collect { cloudEntities ->
                     val defaultBoxes = buildRigItems(_uiState.value.selectedRig)
-                    val mapped = cloudEntities.mapIndexed { idx, entity ->
-                        val fallbackBox = defaultBoxes.getOrNull(idx % defaultBoxes.size)?.boundingBox
-                        entity.toDomainModel(fallbackBox, idx)
+                    val mapped = if (cloudEntities.isNotEmpty()) {
+                        cloudEntities.mapIndexed { idx, entity ->
+                            val fallbackBox = defaultBoxes.getOrNull(idx % defaultBoxes.size)?.boundingBox
+                            entity.toDomainModel(fallbackBox, idx)
+                        }
+                    } else {
+                        _uiState.value.items.ifEmpty { defaultBoxes }
                     }
                     _uiState.update { it.copy(items = mapped, cloudSyncError = null) }
                 }
@@ -1021,18 +1038,22 @@ class BaggageGuardViewModel(
             it.copy(
                 selectedCarrier = carrier,
                 bookingCodeInput = derivedPnr,
+                isCheckingBooking = false,
                 connectedBooking = updatedBooking,
                 selectedPreset = carrier.cabinPreset
             )
         }
+        connectAndAnalyzeAirlineBooking(
+            passengerName = name,
+            passengerEmail = email
+        )
     }
 
     fun syncBookingWithUserIdentity(userName: String?, userEmail: String?) {
         val cleanName = userName?.trim()
-            ?.takeIf { it.isNotBlank() && !it.equals("Guest Mode", ignoreCase = true) && !it.equals("Log In", ignoreCase = true) }
-            ?: "Masakazu Wada"
-        val cleanEmail = userEmail?.trim()?.takeIf { it.isNotBlank() }
-            ?: "masakazuwada09@gmail.com"
+            ?.takeIf { it.isNotBlank() }
+            ?: "Guest Traveler"
+        val cleanEmail = userEmail?.trim().orEmpty()
 
         val current = _uiState.value
         val carrier = current.selectedCarrier

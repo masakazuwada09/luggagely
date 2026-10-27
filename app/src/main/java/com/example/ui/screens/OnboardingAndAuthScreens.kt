@@ -2,17 +2,15 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,12 +33,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AirplaneTicket
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Luggage
 import androidx.compose.material.icons.filled.PersonOutline
-import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Radar
+import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,12 +56,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
@@ -70,11 +71,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.auth.onGoogleSignInClicked
+import kotlin.math.cos
+import kotlin.math.sin
 import com.example.ui.theme.CrimsonAlert
 import com.example.ui.theme.DashboardBorderLight
 import com.example.ui.theme.DashboardCardWhite
@@ -388,9 +392,9 @@ fun IntroWelcomeScreen(
 }
 
 /**
- * Screen 2: Login / Sign-Up Screen styled with the exact same clean
- * light Facebook-inspired palette as the Dashboard (`DashboardFeedGrayBg`, `DashboardCardWhite`,
- * `DashboardSurfaceLight`, `DashboardBorderLight`, `FacebookBlue`, `TextPrimary`, `TextSecondary`).
+ * Screen 2: Login Screen — borderless layout with centered large Luggagely logo,
+ * travel/luggage items circling around it at 35% opacity, and only the
+ * "Cloud Sync &" text below the logo, followed by Google Sign in and Facebook Sign in buttons.
  */
 @Composable
 fun AuthLoginSignUpScreen(
@@ -403,9 +407,30 @@ fun AuthLoginSignUpScreen(
     val coroutineScope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
-    var isSignUpMode by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var authErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "orbit_items")
+    val orbitAngleDeg by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 22000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbit_angle"
+    )
+
+    val circlingItems = remember {
+        listOf(
+            Icons.Default.Luggage,
+            Icons.Default.FlightTakeoff,
+            Icons.Default.AirplaneTicket,
+            Icons.Default.PhotoCamera,
+            Icons.Default.Scale,
+            Icons.Default.Radar
+        )
+    }
 
     Box(
         modifier = modifier
@@ -420,12 +445,13 @@ fun AuthLoginSignUpScreen(
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Top Bar with Back Button + Login / Sign Up Switcher Pill in Dashboard Light Theme
+            // Top Bar: Borderless Back Button only
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.Start,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
@@ -434,7 +460,6 @@ fun AuthLoginSignUpScreen(
                         .size(48.dp)
                         .clip(CircleShape)
                         .background(DashboardCardWhite)
-                        .border(1.dp, DashboardBorderLight, CircleShape)
                         .testTag("auth_back_button")
                 ) {
                     Icon(
@@ -443,213 +468,130 @@ fun AuthLoginSignUpScreen(
                         tint = TextPrimary
                     )
                 }
-
-                // Login / Sign Up Mode Toggle Pill matching Dashboard white card & FacebookBlue active pill
-                Surface(
-                    color = DashboardCardWhite,
-                    shape = RoundedCornerShape(50),
-                    border = BorderStroke(1.dp, DashboardBorderLight)
-                ) {
-                    Row(modifier = Modifier.padding(4.dp)) {
-                        Surface(
-                            modifier = Modifier
-                                .testTag("mode_login_tab")
-                                .clickable {
-                                    isSignUpMode = false
-                                    authErrorMessage = null
-                                },
-                            color = if (!isSignUpMode) FacebookBlue else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = "Log In",
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = if (!isSignUpMode) Color.White else TextSecondary,
-                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
-                            )
-                        }
-
-                        Surface(
-                            modifier = Modifier
-                                .testTag("mode_signup_tab")
-                                .clickable {
-                                    isSignUpMode = true
-                                    authErrorMessage = null
-                                },
-                            color = if (isSignUpMode) FacebookBlue else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = "Sign Up",
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = if (isSignUpMode) Color.White else TextSecondary,
-                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
-                            )
-                        }
-                    }
-                }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Main Clean White Card matching Dashboard cards
-            Surface(
-                color = DashboardCardWhite,
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, DashboardBorderLight),
-                modifier = Modifier.fillMaxWidth()
+            // Center Hero: Large Centered Luggagely Logo + Items Circling at 35% Opacity + Cloud Sync & Text Only
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                Column(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                        .size(260.dp)
+                        .testTag("auth_logo_orbit_box"),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    // Subtle Orbit Track at 35% opacity
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(0.35f)
                     ) {
+                        val radiusPx = size.minDimension * 0.40f
+                        drawCircle(
+                            color = FacebookBlue,
+                            radius = radiusPx,
+                            style = Stroke(
+                                width = 2.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 12f), 0f)
+                            )
+                        )
+                        drawCircle(
+                            color = FacebookBlue.copy(alpha = 0.14f),
+                            radius = size.minDimension * 0.25f
+                        )
+                    }
+
+                    // Circling Luggage & Travel Items at 35% Opacity
+                    val orbitRadiusDp = 104f
+                    circlingItems.forEachIndexed { index, iconVector ->
+                        val itemAngleDeg = orbitAngleDeg + (index * (360f / circlingItems.size))
+                        val itemAngleRad = Math.toRadians(itemAngleDeg.toDouble())
+                        val offsetX = (cos(itemAngleRad) * orbitRadiusDp).dp
+                        val offsetY = (sin(itemAngleRad) * orbitRadiusDp).dp
+
                         Box(
                             modifier = Modifier
+                                .offset(x = offsetX, y = offsetY)
+                                .alpha(0.35f)
                                 .size(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(FacebookBlueSoftBg),
+                                .clip(CircleShape)
+                                .background(DashboardCardWhite),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Luggage,
+                                imageVector = iconVector,
                                 contentDescription = null,
                                 tint = FacebookBlue,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Column {
-                            Text(
-                                text = if (isSignUpMode) "CREATE ACCOUNT" else "WELCOME BACK",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = FacebookBlue
-                            )
-                            Text(
-                                text = "Luggagely Cloud Sync",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                     }
 
+                    // Large Centered Luggagely Logo
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_luggagely_mark),
+                        contentDescription = "Luggagely Logo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .height(124.dp)
+                            .testTag("auth_centered_logo")
+                    )
+                }
+
+                // Cloud Sync & Text Below Logo Only (No borders, no other texts)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text(
-                        text = if (isSignUpMode) {
-                            "Create your\nLuggagely\naccount"
-                        } else {
-                            "Ready to keep\ntrack of your\nluggage?"
-                        },
-                        style = MaterialTheme.typography.displayMedium.copy(
-                            fontSize = 32.sp,
-                            lineHeight = 40.sp,
-                            fontWeight = FontWeight.Bold
+                        text = "Cloud Sync & Real-Time SAM 3.1 Manifest",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
                         ),
                         color = TextPrimary,
-                        modifier = Modifier.testTag("auth_headline")
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.testTag("auth_cloud_sync_title")
                     )
-
                     Text(
-                        text = if (isSignUpMode) {
-                            "Sign up with your Google account for automatic cloud manifest backup and airline booking lookup."
-                        } else {
-                            "Please log in to access your account and synced airline baggage allowance."
-                        },
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextSecondary
+                        text = "Your scanned gear weights, live airline PNR bookings, and personal bag shifts stay synced securely with Google Sign-In.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
                     )
+                }
 
-                    // Feature Highlights Surface inside Card
+                AnimatedVisibility(visible = authErrorMessage != null) {
                     Surface(
-                        color = DashboardSurfaceLight,
-                        shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, DashboardBorderLight)
+                        color = CrimsonAlert.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Column(
+                        Text(
+                            text = authErrorMessage ?: "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = CrimsonAlert,
+                            textAlign = TextAlign.Center,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VerifiedUser,
-                                    contentDescription = null,
-                                    tint = FacebookBlue,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Text(
-                                    text = if (isSignUpMode) {
-                                        "Instant One-Tap Google Account Registration"
-                                    } else {
-                                        "Cloud Sync & Real-Time SAM 3.1 Manifest"
-                                    },
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontWeight = FontWeight.Bold
-                                    ),
-                                    color = TextPrimary
-                                )
-                            }
-                            Text(
-                                text = "Your scanned gear weights, live airline PNR bookings, and personal bag shifts stay synced securely with Google Sign-In.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextSecondary
-                            )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = EmeraldSafe,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "Auto-matches bookings by Passenger Name & Email",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = TextPrimary
-                                )
-                            }
-                        }
-                    }
-
-                    AnimatedVisibility(visible = authErrorMessage != null) {
-                        Surface(
-                            color = CrimsonAlert.copy(alpha = 0.10f),
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, CrimsonAlert.copy(alpha = 0.35f))
-                        ) {
-                            Text(
-                                text = authErrorMessage ?: "",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = CrimsonAlert,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                            )
-                        }
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Primary & Secondary Social Sign-In Buttons (react-native-ico-social-media style)
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // 1. First Button: "Google Sign in" with Google Logo
+            // Borderless Social Sign-In Buttons
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 1. First Button: "Google Sign in" with Google Logo (No border)
                 Button(
                     onClick = {
                         isLoading = true
@@ -675,7 +617,6 @@ fun AuthLoginSignUpScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .border(1.dp, DashboardBorderLight, RoundedCornerShape(14.dp))
                         .testTag("google_sign_in_button"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -683,7 +624,7 @@ fun AuthLoginSignUpScreen(
                         contentColor = TextPrimary,
                         disabledContainerColor = DashboardCardWhite.copy(alpha = 0.7f)
                     ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.dp)
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
@@ -709,7 +650,7 @@ fun AuthLoginSignUpScreen(
                     }
                 }
 
-                // 2. Second Button Below: "Facebook Sign in" with Facebook Logo
+                // 2. Second Button Below: "Facebook Sign in" with Facebook Logo (No border)
                 Button(
                     onClick = {
                         isLoading = true
@@ -742,7 +683,7 @@ fun AuthLoginSignUpScreen(
                         contentColor = Color.White,
                         disabledContainerColor = FacebookBlue.copy(alpha = 0.6f)
                     ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.dp)
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Box(
                         modifier = Modifier
@@ -768,19 +709,19 @@ fun AuthLoginSignUpScreen(
                     )
                 }
 
-                // 3. Guest Option Button: "Continue As Guest"
+                // 3. Guest Option Button: "Continue As Guest" (No border)
                 Button(
                     onClick = onContinueAsGuest,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
-                        .border(1.dp, DashboardBorderLight, RoundedCornerShape(14.dp))
                         .testTag("continue_as_guest_button"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = DashboardSurfaceLight,
                         contentColor = TextSecondary
-                    )
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.PersonOutline,
