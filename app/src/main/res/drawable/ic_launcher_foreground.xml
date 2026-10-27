@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Corner Reticle Brackets inside 66dp safe zone -->
+    <path
+        android:fillColor="#818CF8"
+        android:pathData="M28,32h9v3h-6v6h-3zM71,32h9v9h-3v-6h-6zM28,67h3v6h6v3h-9zM77,67h3v9h-9v-3h6z" />
+    <!-- Bold Luggage Silhouette -->
+    <path
+        android:fillColor="#E0E7FF"
+        android:pathData="M45,33h18c1.66,0 3,1.34 3,3v5h6c2.21,0 4,1.79 4,4v22c0,2.21 -1.79,4 -4,4H36c-2.21,0 -4,-1.79 -4,-4V45c0,-2.21 1.79,-4 4,-4h6v-5c0,-1.66 1.34,-3 3,-3zM48,41h12v-5H48v5z" />
+    <!-- Cybernetic Segmentation Laser Line & Core Accent -->
+    <path
+        android:fillColor="#6366F1"
+        android:pathData="M38,47h32v18H38z" />
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M25,54h58v2.5H25z" />
+</vector>

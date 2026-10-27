@@ -1,0 +1,104 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidBaggageItem(data, userId) {
+      return data.keys().hasAll([
+               'userId',
+               'name',
+               'weightGrams',
+               'source',
+               'category',
+               'isShiftedToPersonal',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId',
+               'name',
+               'weightGrams',
+               'source',
+               'category',
+               'isShiftedToPersonal',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userId == userId &&
+             data.name is string &&
+             data.name.size() >= 1 &&
+             data.name.size() <= 120 &&
+             data.weightGrams is int &&
+             data.weightGrams >= 50 &&
+             data.weightGrams <= 50000 &&
+             data.source is string &&
+             data.source in ['AI_SCANNED', 'MANUAL_ENTRY'] &&
+             data.category is string &&
+             data.category in ['COMPUTE', 'POWER', 'APPAREL', 'LIQUIDS', 'ACCESSORY'] &&
+             data.isShiftedToPersonal is bool &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    match /users/{userId}/baggage_items/{itemId} {
+      allow get: if isSignedIn() &&
+                    isValidId(userId) &&
+                    isValidId(itemId) &&
+                    request.auth.uid == userId;
+
+      allow list: if isSignedIn() &&
+                     isValidId(userId) &&
+                     request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(itemId) &&
+                       request.auth.uid == userId &&
+                       isValidBaggageItem(incoming(), userId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(itemId) &&
+                       request.auth.uid == userId &&
+                       isValidBaggageItem(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name',
+                         'weightGrams',
+                         'source',
+                         'category',
+                         'isShiftedToPersonal',
+                         'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(itemId) &&
+                       request.auth.uid == userId;
+    }
+  }
+}

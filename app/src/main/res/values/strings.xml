@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">Baggage Guard</string>
+    <string name="brand_subtitle">ESCORT AI // VISION-SEGMENTATION &amp; MASS OPTIMIZER</string>
+    <string name="ai_segmentation_active">AI Segmentation Active</string>
+    <string name="ai_scanning_in_progress">SAM 3.1 Multi-Agent Scan…</string>
+    <string name="scan_gear">Scan Gear</string>
+    <string name="rescan_gear">Re-Scan Gear</string>
+    <string name="manifest_title">DYNAMIC BAGGAGE MANIFEST</string>
+    <string name="cumulative_weight_label">TOTAL CUMULATIVE WEIGHT</string>
+    <string name="airline_limit_label">AIRLINE LIMIT</string>
+    <string name="cabin_7kg">Cabin 7.0 kg</string>
+    <string name="cabin_10kg">Priority 10.0 kg</string>
+    <string name="checked_20kg">Checked 20.0 kg</string>
+    <string name="checked_23kg">Exec 23.0 kg</string>
+    <string name="status_safe">OPTIMAL // WITHIN LIMIT</string>
+    <string name="status_near_limit">CAUTION // APPROACHING LIMIT</string>
+    <string name="status_overweight">BREACH // OVERWEIGHT DETECTED</string>
+    <string name="legend_ai_scanned">AI-Scanned (SAM 3.1)</string>
+    <string name="legend_manual_entry">Manual Override</string>
+    <string name="manual_entry_title">MANUAL ITEM ENTRY &amp; OVERRIDE</string>
+    <string name="manual_entry_subtitle">Log un-scanned gear (e.g., packed boots, liquids, cables) with exact mass</string>
+    <string name="item_name_placeholder">Item description (e.g., Packed Leather Boots)</string>
+    <string name="item_weight_placeholder">Weight (kg)</string>
+    <string name="add_to_manifest">Add to Manifest</string>
+    <string name="delete_item_cd">Remove item from manifest</string>
+    <string name="shift_to_personal_cd">Shift item to personal bag</string>
+    <string name="empty_manifest_title">No Gear Logged in Active Manifest</string>
+    <string name="empty_manifest_subtitle">Tap Scan Gear in the viewport above or add an item manually below.</string>
+    <string name="auto_shift_action">Execute Escort AI Shift</string>
+    <string name="restore_shifted_action">Restore Shifted Items</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "Baggage Guard",
+  "description": "Escort AI: Baggage Guard — a smart travel baggage weight optimizer and real-time vision-segmentation assistant for global travelers and nomads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

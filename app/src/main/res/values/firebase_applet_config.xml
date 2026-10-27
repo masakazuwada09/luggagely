@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<resources>
+    <string name="firestore_database_id" translatable="false">ai-studio-android-baggageg-20e39cd1-d428-4782-936a-377d4ae04e25</string>
+    <string name="recaptcha_site_key" translatable="false">6LfXhAIuAAAAAFQ35wPrG7IwT0ag6644fGjmD2Ph</string>
+</resources>

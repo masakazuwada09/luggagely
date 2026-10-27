@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "BaggageItemDoc": {
+      "title": "BaggageItemDoc",
+      "description": "Represents a luggage item in the user's dynamic baggage manifest (AI-scanned or manually entered).",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the authenticated user owning this item."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the luggage item."
+        },
+        "weightGrams": {
+          "type": "integer",
+          "description": "Weight of the item in grams (e.g., 2150 for 2.15 kg)."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["AI_SCANNED", "MANUAL_ENTRY"],
+          "description": "Origin of the item entry."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["COMPUTE", "POWER", "APPAREL", "LIQUIDS", "ACCESSORY"],
+          "description": "Category classification of the gear."
+        },
+        "isShiftedToPersonal": {
+          "type": "boolean",
+          "description": "Whether the item has been shifted to the personal bag buffer."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the item was created (must submit FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the item was last updated (must submit FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "weightGrams",
+        "source",
+        "category",
+        "isShiftedToPersonal",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/baggage_items/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/BaggageItemDoc"
+      },
+      "description": "Per-user subcollection storing the user's baggage manifest items."
+    }
+  }
+}
