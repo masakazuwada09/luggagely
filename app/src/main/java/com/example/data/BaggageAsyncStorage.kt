@@ -335,6 +335,193 @@ object BaggageAsyncStorage {
     }
 
     /**
+     * Computes a refined [NormalizedRect] and 36-point non-rectangular SAM silhouette contour from
+     * interactive user prompts: positive foreground points (`+`), negative background points (`-`),
+     * and/or a custom drawn bounding box.
+     */
+    fun extractInteractiveSamContour(
+        sourceBitmap: Bitmap?,
+        positivePoints: List<NormalizedPoint>,
+        negativePoints: List<NormalizedPoint>,
+        customBox: NormalizedRect?
+    ): Pair<NormalizedRect, List<NormalizedPoint>> {
+        // 1. Determine the active region of interest from customBox and/or positivePoints
+        val baseBox: NormalizedRect = when {
+            customBox != null && positivePoints.isNotEmpty() -> {
+                val minPx = minOf(customBox.left, positivePoints.minOf { it.x } - 0.08f).coerceIn(0.04f, 0.82f)
+                val minPy = minOf(customBox.top, positivePoints.minOf { it.y } - 0.08f).coerceIn(0.04f, 0.82f)
+                val maxPx = maxOf(customBox.left + customBox.width, positivePoints.maxOf { it.x } + 0.08f).coerceIn(minPx + 0.14f, 0.96f)
+                val maxPy = maxOf(customBox.top + customBox.height, positivePoints.maxOf { it.y } + 0.08f).coerceIn(minPy + 0.14f, 0.96f)
+                NormalizedRect(minPx, minPy, maxPx - minPx, maxPy - minPy)
+            }
+            customBox != null -> customBox
+            positivePoints.size == 1 -> {
+                val pt = positivePoints.first()
+                // Region-grow around the single tapped SAM point
+                growBoxFromSeedPoint(sourceBitmap, pt)
+            }
+            positivePoints.size >= 2 -> {
+                val minX = (positivePoints.minOf { it.x } - 0.11f).coerceIn(0.04f, 0.78f)
+                val minY = (positivePoints.minOf { it.y } - 0.11f).coerceIn(0.04f, 0.78f)
+                val maxX = (positivePoints.maxOf { it.x } + 0.11f).coerceIn(minX + 0.18f, 0.96f)
+                val maxY = (positivePoints.maxOf { it.y } + 0.11f).coerceIn(minY + 0.18f, 0.96f)
+                NormalizedRect(minX, minY, maxX - minX, maxY - minY)
+            }
+            else -> NormalizedRect(0.22f, 0.22f, 0.56f, 0.50f)
+        }
+
+        val initialContour = extractPreciseObjectContour(sourceBitmap, baseBox)
+        if (positivePoints.isEmpty() && negativePoints.isEmpty()) {
+            return baseBox to initialContour
+        }
+
+        val cx = baseBox.left + baseBox.width * 0.5f
+        val cy = baseBox.top + baseBox.height * 0.5f
+
+        // Adjust contour vertices so positive points are comfortably inside the mask
+        // and negative points push the contour inward (excluding background regions)
+        val adjusted = initialContour.map { vertex ->
+            var vx = vertex.x
+            var vy = vertex.y
+
+            // Expand outward toward nearby positive foreground points
+            for (pos in positivePoints) {
+                val angleV = kotlin.math.atan2((vy - cy).toDouble(), (vx - cx).toDouble())
+                val angleP = kotlin.math.atan2((pos.y - cy).toDouble(), (pos.x - cx).toDouble())
+                val angleDiff = abs(kotlin.math.atan2(sin(angleV - angleP), cos(angleV - angleP)))
+                if (angleDiff < 0.55) {
+                    val distV = kotlin.math.hypot((vx - cx).toDouble(), (vy - cy).toDouble()).toFloat()
+                    val distP = (kotlin.math.hypot((pos.x - cx).toDouble(), (pos.y - cy).toDouble()).toFloat() + 0.045f)
+                    if (distP > distV) {
+                        val weight = ((0.55 - angleDiff) / 0.55).toFloat()
+                        val targetDist = distV + (distP - distV) * weight
+                        val scale = if (distV > 0.001f) targetDist / distV else 1f
+                        vx = (cx + (vx - cx) * scale).coerceIn(0.03f, 0.97f)
+                        vy = (cy + (vy - cy) * scale).coerceIn(0.03f, 0.97f)
+                    }
+                }
+            }
+
+            // Contract inward away from nearby negative exclusion points
+            for (neg in negativePoints) {
+                val angleV = kotlin.math.atan2((vy - cy).toDouble(), (vx - cx).toDouble())
+                val angleN = kotlin.math.atan2((neg.y - cy).toDouble(), (neg.x - cx).toDouble())
+                val angleDiff = abs(kotlin.math.atan2(sin(angleV - angleN), cos(angleV - angleN)))
+                if (angleDiff < 0.60) {
+                    val distV = kotlin.math.hypot((vx - cx).toDouble(), (vy - cy).toDouble()).toFloat()
+                    val distN = (kotlin.math.hypot((neg.x - cx).toDouble(), (neg.y - cy).toDouble()).toFloat() - 0.035f).coerceAtLeast(0.05f)
+                    if (distN < distV) {
+                        val weight = ((0.60 - angleDiff) / 0.60).toFloat()
+                        val targetDist = distV - (distV - distN) * weight
+                        val scale = if (distV > 0.001f) targetDist / distV else 1f
+                        vx = (cx + (vx - cx) * scale).coerceIn(0.03f, 0.97f)
+                        vy = (cy + (vy - cy) * scale).coerceIn(0.03f, 0.97f)
+                    }
+                }
+            }
+            NormalizedPoint(vx, vy)
+        }
+
+        return baseBox to adjusted
+    }
+
+    private fun growBoxFromSeedPoint(bitmap: Bitmap?, seed: NormalizedPoint): NormalizedRect {
+        if (bitmap == null || bitmap.width < 16 || bitmap.height < 16) {
+            val l = (seed.x - 0.24f).coerceIn(0.06f, 0.52f)
+            val t = (seed.y - 0.22f).coerceIn(0.06f, 0.56f)
+            return NormalizedRect(l, t, 0.48f, 0.44f)
+        }
+        val w = bitmap.width
+        val h = bitmap.height
+        val sx = (seed.x * w).toInt().coerceIn(0, w - 1)
+        val sy = (seed.y * h).toInt().coerceIn(0, h - 1)
+        val seedColor = bitmap.getPixel(sx, sy)
+        val sr = Color.red(seedColor)
+        val sg = Color.green(seedColor)
+        val sb = Color.blue(seedColor)
+
+        var minX = sx
+        var maxX = sx
+        var minY = sy
+        var maxY = sy
+        val stepX = (w / 24).coerceAtLeast(1)
+        val stepY = (h / 24).coerceAtLeast(1)
+        val searchRadiusX = (w * 0.34f).toInt()
+        val searchRadiusY = (h * 0.34f).toInt()
+
+        for (y in (sy - searchRadiusY).coerceAtLeast(0)..(sy + searchRadiusY).coerceAtMost(h - 1) step stepY) {
+            for (x in (sx - searchRadiusX).coerceAtLeast(0)..(sx + searchRadiusX).coerceAtMost(w - 1) step stepX) {
+                val px = bitmap.getPixel(x, y)
+                val diff = abs(Color.red(px) - sr) + abs(Color.green(px) - sg) + abs(Color.blue(px) - sb)
+                if (diff < 85) {
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+
+        val left = (minX.toFloat() / w - 0.04f).coerceIn(0.06f, 0.65f)
+        val top = (minY.toFloat() / h - 0.04f).coerceIn(0.06f, 0.65f)
+        val bw = ((maxX - minX).toFloat() / w + 0.08f).coerceIn(0.24f, (0.94f - left).coerceAtLeast(0.24f))
+        val bh = ((maxY - minY).toFloat() / h + 0.08f).coerceIn(0.24f, (0.94f - top).coerceAtLeast(0.24f))
+        return NormalizedRect(left, top, bw, bh)
+    }
+
+    /**
+     * Generates a realistic captured studio photo bitmap when running on a virtual camera/emulator
+     * so the SAM Image Editor always has a crisp captured image to place points and boxes on.
+     */
+    fun createDefaultCameraCaptureBitmap(): Bitmap {
+        val width = 640
+        val height = 640
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFEAECEF.toInt()
+        }
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+
+        // Subtle studio floor shadow
+        val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFD5D9DF.toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawOval(RectF(150f, 470f, 490f, 535f), shadowPaint)
+
+        // Ergonomic backpack/luggage silhouette in the center
+        val bodyPath = Path().apply {
+            moveTo(220f, 165f)
+            cubicTo(260f, 120f, 380f, 120f, 420f, 165f)
+            cubicTo(465f, 210f, 485f, 310f, 470f, 430f)
+            cubicTo(460f, 485f, 415f, 510f, 320f, 510f)
+            cubicTo(225f, 510f, 180f, 485f, 170f, 430f)
+            cubicTo(155f, 310f, 175f, 210f, 220f, 165f)
+            close()
+        }
+        val itemPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF1877F2.toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawPath(bodyPath, itemPaint)
+
+        val pocketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF0D5BD9.toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawOval(RectF(215f, 285f, 425f, 465f), pocketPaint)
+
+        val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF1C1E21.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 18f
+        }
+        canvas.drawArc(RectF(265f, 95f, 375f, 185f), 180f, 180f, false, handlePaint)
+        return bitmap
+    }
+
+    /**
      * Builds a smooth closed Android [Path] from normalized contour points using Catmull-Rom / cubic Bezier
      * interpolation so the SAM cutout and highlight follow smooth organic curves instead of straight segments.
      */

@@ -532,6 +532,7 @@ fun BaggageGuardStudio(
                                 runCatching { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) }
                             },
                             onScanCameraFrame = viewModel::scanCameraFrameWithAi,
+                            onCutWithInteractiveMask = viewModel::scanCameraFrameWithInteractivePrompt,
                             onSelectRig = viewModel::selectGearRig,
                             onSelectItem = viewModel::selectItem,
                             onToggleBoxes = viewModel::toggleBoundingBoxes,

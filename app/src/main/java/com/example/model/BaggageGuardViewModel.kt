@@ -654,20 +654,36 @@ class BaggageGuardViewModel(
     }
 
     fun scanCameraFrameWithAi(frameBitmap: Bitmap?) {
+        scanCameraFrameWithInteractivePrompt(
+            frameBitmap = frameBitmap,
+            customBox = null,
+            customContour = null
+        )
+    }
+
+    fun scanCameraFrameWithInteractivePrompt(
+        frameBitmap: Bitmap?,
+        customBox: NormalizedRect?,
+        customContour: List<NormalizedPoint>?
+    ) {
         if (_uiState.value.isScanning) return
         scanJob?.cancel()
 
         scanJob = viewModelScope.launch {
             val effectiveBitmap = frameBitmap ?: createFallbackCameraCaptureBitmap()
             val scaledBitmap = scaleBitmapForInference(effectiveBitmap, maxDimension = 768)
-            val salientBox = detectSalientForegroundBox(scaledBitmap)
-            val initialContour = BaggageAsyncStorage.extractPreciseObjectContour(scaledBitmap, salientBox)
+            val salientBox = customBox ?: detectSalientForegroundBox(scaledBitmap)
+            val initialContour = if (customContour != null && customContour.size >= 6) {
+                customContour
+            } else {
+                BaggageAsyncStorage.extractPreciseObjectContour(scaledBitmap, salientBox)
+            }
 
             // Immediately highlight the captured object's precise non-square contour while SAM segments & labels it
             _uiState.update { state ->
                 val previewItem = BaggageItem(
                     id = "sam_capture_preview",
-                    name = "SAM Segmenting & Labelling…",
+                    name = "SAM Cutting & Labelling…",
                     weightKg = 0.0,
                     source = ItemSource.AI_SCANNED,
                     category = GearCategory.ACCESSORY,
@@ -679,7 +695,7 @@ class BaggageGuardViewModel(
                 state.copy(
                     isScanning = true,
                     scanProgress = 0.45f,
-                    scanPhaseLabel = "Segmenting & Precise Cutout…",
+                    scanPhaseLabel = "Cutting SAM Mask…",
                     lastSegmentedItem = previewItem,
                     aiError = null
                 )
@@ -744,16 +760,26 @@ class BaggageGuardViewModel(
                 val category = runCatching { GearCategory.valueOf(catStr) }.getOrDefault(fallbackProfile.third)
                 val conf = firstObj?.optDouble("confidence", 0.98)?.toFloat()?.coerceIn(0.88f, 0.99f) ?: 0.98f
 
-                val left = firstObj?.optDouble("left", salientBox.left.toDouble())?.toFloat()?.coerceIn(0.08f, 0.65f)
-                    ?: salientBox.left
-                val top = firstObj?.optDouble("top", salientBox.top.toDouble())?.toFloat()?.coerceIn(0.08f, 0.65f)
-                    ?: salientBox.top
-                val width = firstObj?.optDouble("width", salientBox.width.toDouble())?.toFloat()?.coerceIn(0.22f, (0.92f - left).coerceAtLeast(0.24f))
-                    ?: salientBox.width
-                val height = firstObj?.optDouble("height", salientBox.height.toDouble())?.toFloat()?.coerceIn(0.22f, (0.90f - top).coerceAtLeast(0.24f))
-                    ?: salientBox.height
-                val box = NormalizedRect(left, top, width, height)
-                val preciseContour = BaggageAsyncStorage.extractPreciseObjectContour(scaledBitmap, box)
+                // Preserve user's interactive box & contour if they specified points or a box in the SAM Image Editor
+                val box = if (customBox != null) {
+                    customBox
+                } else {
+                    val left = firstObj?.optDouble("left", salientBox.left.toDouble())?.toFloat()?.coerceIn(0.08f, 0.65f)
+                        ?: salientBox.left
+                    val top = firstObj?.optDouble("top", salientBox.top.toDouble())?.toFloat()?.coerceIn(0.08f, 0.65f)
+                        ?: salientBox.top
+                    val width = firstObj?.optDouble("width", salientBox.width.toDouble())?.toFloat()?.coerceIn(0.22f, (0.92f - left).coerceAtLeast(0.24f))
+                        ?: salientBox.width
+                    val height = firstObj?.optDouble("height", salientBox.height.toDouble())?.toFloat()?.coerceIn(0.22f, (0.90f - top).coerceAtLeast(0.24f))
+                        ?: salientBox.height
+                    NormalizedRect(left, top, width, height)
+                }
+
+                val preciseContour = if (customContour != null && customContour.size >= 6) {
+                    customContour
+                } else {
+                    BaggageAsyncStorage.extractPreciseObjectContour(scaledBitmap, box)
+                }
 
                 val itemId = "sam_${UUID.randomUUID().toString().take(8)}"
 

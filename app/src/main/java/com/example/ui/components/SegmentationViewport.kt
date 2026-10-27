@@ -18,7 +18,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,15 +41,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Luggage
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
@@ -62,16 +67,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -81,6 +87,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -109,10 +116,37 @@ import com.example.ui.theme.FacebookBlueSoftBg
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import kotlinx.coroutines.delay
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 private const val TAG = "SegmentationViewport"
+
+/**
+ * High-level workflow steps for the Camera -> SAM Image Editor -> Cutout pipeline:
+ * 1. [CAPTURE_CAMERA]: Live full-screen camera viewfinder to capture or pick an image first.
+ * 2. [SAM_IMAGE_EDITOR]: Dedicated Segment Anything Image Editor where the user taps interactive
+ *    foreground/background points (`+` / `-`) and draws/adjusts bounding boxes, then taps **Cut Object**.
+ */
+private enum class CameraEditorWorkflowStep {
+    CAPTURE_CAMERA,
+    SAM_IMAGE_EDITOR
+}
+
+/**
+ * Interactive prompt tool modes inside the SAM Image Editor.
+ */
+private enum class SamEditorPromptTool(val label: String) {
+    ADD_POINT("+ Point"),
+    EXCLUDE_POINT("- Exclude"),
+    DRAW_BOX("Box")
+}
+
+private sealed interface SamPromptHistoryEntry {
+    data class PositivePoint(val point: NormalizedPoint) : SamPromptHistoryEntry
+    data class NegativePoint(val point: NormalizedPoint) : SamPromptHistoryEntry
+    data class BoxPrompt(val previousBox: NormalizedRect?) : SamPromptHistoryEntry
+}
 
 /**
  * Renders the saved SAM silhouette cutout image (decoded from AsyncStorage data URI or local file)
@@ -157,19 +191,14 @@ fun SegmentedItemThumbnail(
     }
 }
 
-private data class HoverDetectionSample(
-    val box: NormalizedRect,
-    val contourPoints: List<NormalizedPoint>,
-    val signature: IntArray,
-    val hasSalientObject: Boolean
-)
-
 /**
- * Edge-to-Edge Full-Screen Camera with True SAM Workflow:
- * 1. Capture Image First (via Capture button, tapping on the object, photo picker, or steady hover lock)
- * 2. Segment the captured frame & trace the exact non-rectangular object silhouette contour
- * 3. Cut out the precise object shape (with transparent background + SAM sticker outline)
- * 4. Auto-label the item and save to AsyncStorage + Dashboard item list.
+ * Full-Screen Camera -> SAM Interactive Image Editor -> Cutout Workflow:
+ * 1. **Capture Image First**: Live full-screen camera preview with a prominent Capture button.
+ * 2. **Redirect to SAM Image Editor**: Opens the captured image in an interactive Segment Anything editor
+ *    where the user can tap interactive points (`+ Point`, `- Exclude`) and drag interactive boxes (`Box`)
+ *    to refine the exact non-rectangular object silhouette mask.
+ * 3. **Show Button to Cut**: Displays the prominent **"Cut Object"** button to slice out the segmented
+ *    silhouette, auto-label it, save it to AsyncStorage, and show it on the Dashboard item list.
  */
 @Composable
 fun FullScreenCameraSegmentationScreen(
@@ -177,6 +206,7 @@ fun FullScreenCameraSegmentationScreen(
     hasCameraPermission: Boolean,
     onRequestCameraPermission: () -> Unit,
     onScanCameraFrame: (Bitmap?) -> Unit,
+    onCutWithInteractiveMask: ((Bitmap?, NormalizedRect?, List<NormalizedPoint>?) -> Unit)? = null,
     onSelectRig: (GearRigPreset) -> Unit,
     onSelectItem: (String?) -> Unit,
     onToggleBoxes: () -> Unit,
@@ -191,39 +221,41 @@ fun FullScreenCameraSegmentationScreen(
     var useBackLens by remember { mutableStateOf(true) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
 
-    // Frozen captured image for the "Capture -> Segment -> Cut -> Label" SAM workflow
-    var capturedFrameBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    // Current step: Step 1 = CAPTURE_CAMERA, Step 2 = SAM_IMAGE_EDITOR
+    var workflowStep by remember { mutableStateOf(CameraEditorWorkflowStep.CAPTURE_CAMERA) }
+    var capturedEditorBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    // Live organic non-square contour preview while aiming the camera
-    val defaultBox = remember { NormalizedRect(0.22f, 0.22f, 0.56f, 0.48f) }
-    var liveHoverBox by remember { mutableStateOf(defaultBox) }
-    var liveContourPoints by remember {
-        mutableStateOf(BaggageAsyncStorage.createOrganicFallbackContour(defaultBox))
-    }
-    var hoverStatusText by remember {
-        mutableStateOf("Capture image or tap object to segment, cut & label")
-    }
-    var hoverLockTicks by remember { mutableIntStateOf(0) }
-    var hasPerformedInitialCapture by remember { mutableStateOf(false) }
+    // Interactive SAM Image Editor state (Points + Box + Undo History)
+    var activePromptTool by remember { mutableStateOf(SamEditorPromptTool.ADD_POINT) }
+    val positivePoints = remember { mutableStateListOf<NormalizedPoint>() }
+    val negativePoints = remember { mutableStateListOf<NormalizedPoint>() }
+    var interactiveBox by remember { mutableStateOf<NormalizedRect?>(null) }
+    val promptHistory = remember { mutableStateListOf<SamPromptHistoryEntry>() }
+    var hasCutCurrentImage by remember { mutableStateOf(false) }
 
-    val currentIsScanning by rememberUpdatedState(uiState.isScanning)
-    val currentOnScanCameraFrame by rememberUpdatedState(onScanCameraFrame)
+    // Drag gesture state for drawing/resizing a SAM Box prompt on the image editor
+    var dragStartNorm by remember { mutableStateOf<NormalizedPoint?>(null) }
 
-    // Helper that captures/freezes the current frame first, then triggers SAM segmentation + precise cutout + labelling
-    val triggerCaptureAndSegment: (Bitmap?) -> Unit = { explicitBitmap ->
-        val rawFrame = explicitBitmap ?: previewViewRef?.bitmap
-        if (rawFrame != null) {
-            val frozenCopy = rawFrame.copy(Bitmap.Config.ARGB_8888, false)
-            capturedFrameBitmap = frozenCopy
-            val sample = analyzeLiveHoverFrame(frozenCopy)
-            liveHoverBox = sample.box
-            liveContourPoints = sample.contourPoints
-            hoverStatusText = "Image captured • Running SAM contour cutout & label…"
-            currentOnScanCameraFrame(frozenCopy)
-        } else {
-            hoverStatusText = "Image captured • Running SAM contour cutout & label…"
-            currentOnScanCameraFrame(null)
-        }
+    // Helper to transition from Step 1 (Camera Capture) -> Step 2 (SAM Image Editor)
+    val openSamImageEditorWithBitmap: (Bitmap) -> Unit = { bitmap ->
+        capturedEditorBitmap = bitmap
+        positivePoints.clear()
+        negativePoints.clear()
+        promptHistory.clear()
+        // Seed an initial interactive center point & box so the user immediately sees the SAM contour
+        // and can tap more points, draw a new box, or tap "Cut Object" right away
+        val initialPoint = NormalizedPoint(0.50f, 0.48f)
+        positivePoints.add(initialPoint)
+        promptHistory.add(SamPromptHistoryEntry.PositivePoint(initialPoint))
+        val (seededBox, _) = BaggageAsyncStorage.extractInteractiveSamContour(
+            sourceBitmap = bitmap,
+            positivePoints = listOf(initialPoint),
+            negativePoints = emptyList(),
+            customBox = null
+        )
+        interactiveBox = seededBox
+        hasCutCurrentImage = false
+        workflowStep = CameraEditorWorkflowStep.SAM_IMAGE_EDITOR
     }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -232,597 +264,373 @@ fun FullScreenCameraSegmentationScreen(
         if (uri != null) {
             val decoded = decodeUriToBitmap(context, uri)
             if (decoded != null) {
-                hasPerformedInitialCapture = true
-                triggerCaptureAndSegment(decoded)
+                openSamImageEditorWithBitmap(decoded)
             }
         }
     }
 
-    // Live contour preview & steady-hover auto-capture assist when camera is in live mode
-    LaunchedEffect(hasCameraPermission, useBackLens, capturedFrameBitmap) {
-        var previousSignature: IntArray? = null
-        var stableFrames = 0
-
-        while (true) {
-            delay(380L)
-            if (currentIsScanning) {
-                hoverStatusText = "SAM segmenting contour, cutting & labelling…"
-                continue
-            }
-
-            // If an image is already captured and frozen, keep displaying its segmented cutout
-            if (capturedFrameBitmap != null) {
-                hoverStatusText = "Image captured • Precise SAM contour cut & labelled"
-                continue
-            }
-
-            val liveBitmap = previewViewRef?.bitmap
-            if (liveBitmap != null && liveBitmap.width > 16 && liveBitmap.height > 16) {
-                val sample = analyzeLiveHoverFrame(liveBitmap)
-                liveHoverBox = sample.box
-                liveContourPoints = sample.contourPoints
-
-                val prevSig = previousSignature
-                val motionDiff = if (prevSig != null) {
-                    computeSignatureDelta(sample.signature, prevSig)
-                } else {
-                    0
-                }
-                previousSignature = sample.signature
-
-                if (motionDiff <= 16 && sample.hasSalientObject) {
-                    stableFrames = (stableFrames + 1).coerceAtMost(4)
-                    hoverLockTicks = stableFrames
-                    hoverStatusText = when (stableFrames) {
-                        1 -> "Tracing object contour • Tap Capture to cut out"
-                        2 -> "Holding steady • Capturing image for SAM…"
-                        else -> "Capturing image & cutting precise contour…"
-                    }
-
-                    if (stableFrames >= 3 && !hasPerformedInitialCapture) {
-                        hasPerformedInitialCapture = true
-                        stableFrames = 0
-                        triggerCaptureAndSegment(liveBitmap)
-                    }
-                } else {
-                    stableFrames = 1
-                    hoverLockTicks = 1
-                    hoverStatusText = "Aim at object & tap Capture to segment, cut & label"
-                }
-            } else if (!hasPerformedInitialCapture) {
-                // Virtual / emulator camera fallback: capture & segment initial item once
-                delay(700L)
-                if (!currentIsScanning && !hasPerformedInitialCapture && capturedFrameBitmap == null) {
-                    hasPerformedInitialCapture = true
-                    hoverLockTicks = 3
-                    hoverStatusText = "Capturing image & cutting precise SAM contour…"
-                    currentOnScanCameraFrame(null)
-                }
-            }
-        }
+    // Recompute the live SAM region & 36-point non-rectangular silhouette contour whenever points/box change
+    val liveSamPair: Pair<NormalizedRect, List<NormalizedPoint>> = remember(
+        capturedEditorBitmap,
+        positivePoints.toList(),
+        negativePoints.toList(),
+        interactiveBox
+    ) {
+        BaggageAsyncStorage.extractInteractiveSamContour(
+            sourceBitmap = capturedEditorBitmap,
+            positivePoints = positivePoints.toList(),
+            negativePoints = negativePoints.toList(),
+            customBox = interactiveBox
+        )
     }
 
-    // Single segmented item currently highlighted and cut out
-    val singleSegmentedItem: BaggageItem? = remember(uiState.lastSegmentedItem, uiState.activeItems) {
-        uiState.lastSegmentedItem
-            ?: uiState.activeItems.firstOrNull { it.boundingBox != null }
+    val computedBox = liveSamPair.first
+    val computedContour = liveSamPair.second
+    val hasActivePrompts = positivePoints.isNotEmpty() || interactiveBox != null
+
+    val latestCutItem: BaggageItem? = remember(uiState.lastSegmentedItem, hasCutCurrentImage) {
+        if (hasCutCurrentImage) uiState.lastSegmentedItem else null
     }
 
-    val displayedBox: NormalizedRect = singleSegmentedItem?.boundingBox ?: liveHoverBox
-    val displayedContour: List<NormalizedPoint> = remember(singleSegmentedItem, liveContourPoints, displayedBox) {
-        when {
-            singleSegmentedItem != null && singleSegmentedItem.contourPoints.size >= 6 ->
-                singleSegmentedItem.contourPoints
-            liveContourPoints.size >= 6 ->
-                liveContourPoints
-            else ->
-                BaggageAsyncStorage.createOrganicFallbackContour(displayedBox)
-        }
-    }
-
-    val isImageCapturedOrSegmented = capturedFrameBitmap != null || singleSegmentedItem != null
-
-    // Full-Screen Edge-to-Edge Camera Container
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(DashboardFeedGrayBg)
             .testTag("fullscreen_camera_segmentation_container")
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                // Tapping anywhere on the object in the camera view captures the image first, then segments & cuts it
-                if (!uiState.isScanning) {
-                    hasPerformedInitialCapture = true
-                    triggerCaptureAndSegment(capturedFrameBitmap ?: previewViewRef?.bitmap)
-                }
-            }
     ) {
         val viewW = maxWidth
         val viewH = maxHeight
-        val frozenPhoto = capturedFrameBitmap
 
-        // 1. Edge-to-Edge Full-Screen Live Camera Feed OR Captured Frozen Image
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("segmentation_viewport_frame")
-        ) {
-            if (frozenPhoto != null) {
-                Image(
-                    bitmap = frozenPhoto.asImageBitmap(),
-                    contentDescription = "Captured Frame for SAM Segmentation",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else if (hasCameraPermission) {
-                LiveCameraXPreview(
-                    useBackLens = useBackLens,
-                    onPreviewViewReady = { view -> previewViewRef = view },
+        when (workflowStep) {
+            // =========================================================================
+            // STEP 1: FULL-SCREEN CAMERA CAPTURE (Capture Image First)
+            // =========================================================================
+            CameraEditorWorkflowStep.CAPTURE_CAMERA -> {
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .testTag("camerax_live_preview")
-                )
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(DashboardFeedGrayBg)
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                        .testTag("segmentation_viewport_frame")
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clip(CircleShape)
-                            .background(FacebookBlueSoftBg),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PhotoCamera,
-                            contentDescription = null,
-                            tint = FacebookBlue,
-                            modifier = Modifier.size(34.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Capture & Segment Item with SAM",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Captures image first, traces the exact non-square object contour, cuts it out, and labels it.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
-            }
-
-            // 2. Precise Non-Square SAM Object Silhouette Contour Highlight on Full Screen
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawPreciseSamContourHighlight(
-                    contourPoints = displayedContour,
-                    isLocked = isImageCapturedOrSegmented || hoverLockTicks >= 2,
-                    dimOutsideBackdrop = isImageCapturedOrSegmented
-                )
-            }
-
-            // 3. Auto-Labelling Floating Pill Anchored to the Top of the Segmented Object Contour
-            val minContourX = displayedContour.minOfOrNull { it.x } ?: displayedBox.left
-            val minContourY = displayedContour.minOfOrNull { it.y } ?: displayedBox.top
-            val labelXDp = (viewW * minContourX).coerceIn(16.dp, (viewW - 230.dp).coerceAtLeast(16.dp))
-            val labelYDp = (viewH * minContourY - 46.dp).coerceIn(96.dp, (viewH - 220.dp).coerceAtLeast(96.dp))
-
-            Surface(
-                modifier = Modifier.offset(x = labelXDp, y = labelYDp),
-                color = if (singleSegmentedItem != null) FacebookBlue else DashboardCardWhite.copy(alpha = 0.95f),
-                shape = RoundedCornerShape(50),
-                border = BorderStroke(
-                    1.5.dp,
-                    if (singleSegmentedItem != null) Color.White else FacebookBlue
-                ),
-                shadowElevation = 6.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp)
-                ) {
-                    if (uiState.isScanning) {
-                        CircularProgressIndicator(
-                            color = if (singleSegmentedItem != null) Color.White else FacebookBlue,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(14.dp)
+                    if (hasCameraPermission) {
+                        LiveCameraXPreview(
+                            useBackLens = useBackLens,
+                            onPreviewViewReady = { view -> previewViewRef = view },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("camerax_live_preview")
                         )
                     } else {
-                        Icon(
-                            imageVector = if (singleSegmentedItem != null) Icons.Default.ContentCut else Icons.Default.AutoAwesome,
-                            contentDescription = null,
-                            tint = if (singleSegmentedItem != null) Color.White else FacebookBlue,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-
-                    val pillLabel = when {
-                        uiState.isScanning -> "SAM Segmenting & Cutting…"
-                        singleSegmentedItem != null -> singleSegmentedItem.name
-                        else -> "Tap to Capture & Cut Contour"
-                    }
-
-                    Text(
-                        text = pillLabel,
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = if (singleSegmentedItem != null) Color.White else TextPrimary
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    if (singleSegmentedItem != null && singleSegmentedItem.weightKg > 0.0) {
-                        Text(
-                            text = "• ${BaggageGuardUiState.formatWeight(singleSegmentedItem.weightKg)} kg",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        )
-                    }
-                }
-            }
-        }
-
-        // 4. Floating Top Header Overlay (Full-Screen Camera with StatusBarsPadding)
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = DashboardCardWhite.copy(alpha = 0.94f),
-                shape = RoundedCornerShape(50),
-                border = BorderStroke(1.dp, DashboardBorderLight),
-                shadowElevation = 6.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        IconButton(
-                            onClick = onNavigateBack,
+                        Column(
                             modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(DashboardSurfaceLight)
-                                .border(1.dp, DashboardBorderLight, CircleShape)
-                                .testTag("fullscreen_camera_back_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to Dashboard",
-                                tint = TextPrimary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                .fillMaxSize()
+                                .background(DashboardFeedGrayBg)
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
+                                    .size(76.dp)
                                     .clip(CircleShape)
-                                    .background(if (uiState.isScanning) FacebookBlue else EmeraldSafe)
+                                    .background(FacebookBlueSoftBg),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = null,
+                                    tint = FacebookBlue,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Text(
+                                text = "Step 1: Capture Image First",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                color = TextPrimary
                             )
-                            Column {
-                                Text(
-                                    text = if (capturedFrameBitmap != null) {
-                                        "Captured SAM Cutout"
-                                    } else {
-                                        "SAM Capture • Segment • Cut"
-                                    },
-                                    style = MaterialTheme.typography.labelLarge.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Capture a photo of your item to open the SAM Image Editor, where you can tap interactive points & boxes and cut it out.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+
+                    // Subtle framing guide on live camera before capture
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val guideW = size.width * 0.72f
+                        val guideH = size.height * 0.48f
+                        val left = (size.width - guideW) / 2f
+                        val top = (size.height - guideH) / 2f
+                        val cornerLen = 36f
+                        val stroke = Stroke(width = 4f, cap = StrokeCap.Round)
+                        val guideColor = Color.White.copy(alpha = 0.85f)
+
+                        // Top-left corner bracket
+                        drawLine(guideColor, Offset(left, top), Offset(left + cornerLen, top), stroke.width)
+                        drawLine(guideColor, Offset(left, top), Offset(left, top + cornerLen), stroke.width)
+                        // Top-right corner bracket
+                        drawLine(guideColor, Offset(left + guideW, top), Offset(left + guideW - cornerLen, top), stroke.width)
+                        drawLine(guideColor, Offset(left + guideW, top), Offset(left + guideW, top + cornerLen), stroke.width)
+                        // Bottom-left corner bracket
+                        drawLine(guideColor, Offset(left, top + guideH), Offset(left + cornerLen, top + guideH), stroke.width)
+                        drawLine(guideColor, Offset(left, top + guideH), Offset(left, top + guideH - cornerLen), stroke.width)
+                        // Bottom-right corner bracket
+                        drawLine(guideColor, Offset(left + guideW, top + guideH), Offset(left + guideW - cornerLen, top + guideH), stroke.width)
+                        drawLine(guideColor, Offset(left + guideW, top + guideH), Offset(left + guideW, top + guideH - cornerLen), stroke.width)
+                    }
+                }
+
+                // Top Header Bar (Camera Capture Mode)
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = DashboardCardWhite.copy(alpha = 0.94f),
+                        shape = RoundedCornerShape(50),
+                        border = BorderStroke(1.dp, DashboardBorderLight),
+                        shadowElevation = 6.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                IconButton(
+                                    onClick = onNavigateBack,
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(CircleShape)
+                                        .background(DashboardSurfaceLight)
+                                        .border(1.dp, DashboardBorderLight, CircleShape)
+                                        .testTag("fullscreen_camera_back_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to Dashboard",
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(18.dp)
                                     )
-                                )
-                                Text(
-                                    text = hoverStatusText,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontSize = 10.sp,
-                                        color = TextSecondary
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                }
+
+                                Column {
+                                    Text(
+                                        text = "Step 1 • Capture Image",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                    )
+                                    Text(
+                                        text = "Capture photo to open SAM Image Editor",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontSize = 11.sp,
+                                            color = TextSecondary
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (hasCameraPermission) {
+                                    IconButton(
+                                        onClick = { useBackLens = !useBackLens },
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .testTag("switch_camera_lens_button")
+                                            .clip(CircleShape)
+                                            .background(DashboardSurfaceLight)
+                                            .border(1.dp, DashboardBorderLight, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Cameraswitch,
+                                            contentDescription = "Switch Camera Lens",
+                                            tint = FacebookBlue,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .testTag("pick_luggage_photo_button")
+                                        .clip(CircleShape)
+                                        .background(FacebookBlueSoftBg)
+                                        .border(1.dp, FacebookBlue.copy(alpha = 0.35f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PhotoLibrary,
+                                        contentDescription = "Pick Photo for SAM Editor",
+                                        tint = FacebookBlue,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (hasCameraPermission) {
-                            IconButton(
-                                onClick = {
-                                    capturedFrameBitmap = null
-                                    useBackLens = !useBackLens
-                                },
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .testTag("switch_camera_lens_button")
-                                    .clip(CircleShape)
-                                    .background(DashboardSurfaceLight)
-                                    .border(1.dp, DashboardBorderLight, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Cameraswitch,
-                                    contentDescription = "Switch Camera Lens",
-                                    tint = FacebookBlue,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        IconButton(
-                            onClick = {
-                                photoPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
+                    if (!hasCameraPermission) {
+                        Surface(
                             modifier = Modifier
-                                .size(38.dp)
-                                .testTag("pick_luggage_photo_button")
-                                .clip(CircleShape)
-                                .background(FacebookBlueSoftBg)
-                                .border(1.dp, FacebookBlue.copy(alpha = 0.35f), CircleShape)
+                                .fillMaxWidth()
+                                .testTag("camera_permission_prompt_banner"),
+                            color = DashboardCardWhite.copy(alpha = 0.96f),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, FacebookBlue),
+                            shadowElevation = 4.dp
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.PhotoLibrary,
-                                contentDescription = "Pick Photo to Segment",
-                                tint = FacebookBlue,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Videocam,
+                                        contentDescription = null,
+                                        tint = FacebookBlue,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "Allow camera access to capture photos for SAM Editor",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextPrimary
+                                        )
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = onRequestCameraPermission,
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("grant_camera_permission_button"),
+                                    shape = RoundedCornerShape(50),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = FacebookBlue,
+                                        contentColor = Color.White
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Allow",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            if (!hasCameraPermission) {
+                // Bottom Capture Shutter Card — Captures Image First & Redirects to SAM Image Editor
                 Surface(
                     modifier = Modifier
+                        .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .testTag("camera_permission_prompt_banner"),
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                        .testTag("scan_gear_button")
+                        .clickable {
+                            val liveBitmap = previewViewRef?.bitmap
+                            val captured = if (liveBitmap != null && liveBitmap.width > 16 && liveBitmap.height > 16) {
+                                liveBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                            } else {
+                                BaggageAsyncStorage.createDefaultCameraCaptureBitmap()
+                            }
+                            openSamImageEditorWithBitmap(captured)
+                        },
                     color = DashboardCardWhite.copy(alpha = 0.96f),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, FacebookBlue),
-                    shadowElevation = 4.dp
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, DashboardBorderLight),
+                    shadowElevation = 8.dp
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Videocam,
-                                contentDescription = null,
-                                tint = FacebookBlue,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Allow camera access to capture & segment objects",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontWeight = FontWeight.SemiBold,
+                                text = "Capture Image for SAM Editor",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
                                     color = TextPrimary
                                 )
                             )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = onRequestCameraPermission,
-                            modifier = Modifier
-                                .height(36.dp)
-                                .testTag("grant_camera_permission_button"),
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = FacebookBlue,
-                                contentColor = Color.White
-                            ),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
-                        ) {
                             Text(
-                                text = "Allow",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (!uiState.aiError.isNullOrBlank()) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("ai_scan_error_banner"),
-                    color = Color(0xFFFEF2F2),
-                    shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.dp, CrimsonAlert)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.WarningAmber,
-                            contentDescription = null,
-                            tint = CrimsonAlert,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = uiState.aiError,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CrimsonAlert,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = onDismissAiError,
-                            modifier = Modifier.size(26.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Dismiss error",
-                                tint = CrimsonAlert,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 5. Floating Bottom Capture & Precise SAM Cutout Card Over Full-Screen Camera
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-                .testTag("scan_gear_button")
-                .clickable {
-                    if (!uiState.isScanning) {
-                        hasPerformedInitialCapture = true
-                        triggerCaptureAndSegment(capturedFrameBitmap ?: previewViewRef?.bitmap)
-                    }
-                },
-            color = DashboardCardWhite.copy(alpha = 0.96f),
-            shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.dp, DashboardBorderLight),
-            shadowElevation = 8.dp
-        ) {
-            if (singleSegmentedItem != null && !singleSegmentedItem.imageUri.isNullOrBlank()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    SegmentedItemThumbnail(
-                        imageUri = singleSegmentedItem.imageUri,
-                        itemName = singleSegmentedItem.name,
-                        sizeDp = 58.dp
-                    )
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = EmeraldSafe,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = "PRECISE SAM CUTOUT SAVED",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.sp,
-                                    color = FacebookBlue
+                                text = "Redirects to Image Editor to tap interactive points & boxes",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
                                 )
                             )
                         }
-                        Text(
-                            text = singleSegmentedItem.name,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${BaggageGuardUiState.formatWeight(singleSegmentedItem.weightKg)} kg • Added to Dashboard list",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontSize = 11.sp,
-                                color = TextSecondary
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Button(
                             onClick = {
-                                capturedFrameBitmap = null
-                                hoverStatusText = "Aim at next object & tap Capture to segment"
+                                val liveBitmap = previewViewRef?.bitmap
+                                val captured = if (liveBitmap != null && liveBitmap.width > 16 && liveBitmap.height > 16) {
+                                    liveBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                } else {
+                                    BaggageAsyncStorage.createDefaultCameraCaptureBitmap()
+                                }
+                                openSamImageEditorWithBitmap(captured)
                             },
-                            shape = RoundedCornerShape(50),
-                            border = BorderStroke(1.dp, DashboardBorderLight),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Capture New Image",
-                                tint = FacebookBlue,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "New",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = FacebookBlue
-                                )
-                            )
-                        }
-
-                        Button(
-                            onClick = onNavigateBack,
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("capture_photo_redirect_editor_button"),
                             shape = RoundedCornerShape(50),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = FacebookBlue,
                                 contentColor = Color.White
                             ),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
                         ) {
+                            Icon(
+                                imageVector = Icons.Default.PhotoCamera,
+                                contentDescription = "Capture Image",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Done",
-                                style = MaterialTheme.typography.labelMedium.copy(
+                                text = "Capture",
+                                style = MaterialTheme.typography.labelLarge.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
@@ -830,64 +638,680 @@ fun FullScreenCameraSegmentationScreen(
                         }
                     }
                 }
-            } else {
-                Row(
+            }
+
+            // =========================================================================
+            // STEP 2: SAM INTERACTIVE IMAGE EDITOR (Tap Points & Boxes -> Show Cut Button)
+            // =========================================================================
+            CameraEditorWorkflowStep.SAM_IMAGE_EDITOR -> {
+                val editorBitmap = capturedEditorBitmap
+                    ?: remember { BaggageAsyncStorage.createDefaultCameraCaptureBitmap() }
+
+                // Interactive SAM Image Canvas
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .fillMaxSize()
+                        .testTag("segmentation_viewport_frame")
+                        .pointerInput(activePromptTool) {
+                            detectTapGestures { tapOffset ->
+                                val nx = (tapOffset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0.04f, 0.96f)
+                                val ny = (tapOffset.y / size.height.toFloat().coerceAtLeast(1f)).coerceIn(0.08f, 0.92f)
+                                val tappedPoint = NormalizedPoint(nx, ny)
+                                hasCutCurrentImage = false
+
+                                when (activePromptTool) {
+                                    SamEditorPromptTool.ADD_POINT -> {
+                                        positivePoints.add(tappedPoint)
+                                        promptHistory.add(SamPromptHistoryEntry.PositivePoint(tappedPoint))
+                                    }
+                                    SamEditorPromptTool.EXCLUDE_POINT -> {
+                                        negativePoints.add(tappedPoint)
+                                        promptHistory.add(SamPromptHistoryEntry.NegativePoint(tappedPoint))
+                                    }
+                                    SamEditorPromptTool.DRAW_BOX -> {
+                                        val prev = interactiveBox
+                                        val halfW = 0.24f
+                                        val halfH = 0.22f
+                                        val left = (nx - halfW).coerceIn(0.05f, 0.70f)
+                                        val top = (ny - halfH).coerceIn(0.10f, 0.68f)
+                                        val width = (halfW * 2f).coerceAtMost(0.95f - left)
+                                        val height = (halfH * 2f).coerceAtMost(0.90f - top)
+                                        interactiveBox = NormalizedRect(left, top, width, height)
+                                        promptHistory.add(SamPromptHistoryEntry.BoxPrompt(prev))
+                                    }
+                                }
+                            }
+                        }
+                        .pointerInput(activePromptTool) {
+                            detectDragGestures(
+                                onDragStart = { startOffset ->
+                                    val nx = (startOffset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0.04f, 0.96f)
+                                    val ny = (startOffset.y / size.height.toFloat().coerceAtLeast(1f)).coerceIn(0.08f, 0.92f)
+                                    dragStartNorm = NormalizedPoint(nx, ny)
+                                    promptHistory.add(SamPromptHistoryEntry.BoxPrompt(interactiveBox))
+                                    hasCutCurrentImage = false
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val start = dragStartNorm ?: return@detectDragGestures
+                                    val curX = (change.position.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0.04f, 0.96f)
+                                    val curY = (change.position.y / size.height.toFloat().coerceAtLeast(1f)).coerceIn(0.08f, 0.92f)
+                                    val minX = min(start.x, curX)
+                                    val maxX = max(start.x, curX)
+                                    val minY = min(start.y, curY)
+                                    val maxY = max(start.y, curY)
+                                    val bw = (maxX - minX).coerceAtLeast(0.12f)
+                                    val bh = (maxY - minY).coerceAtLeast(0.12f)
+                                    interactiveBox = NormalizedRect(
+                                        left = minX.coerceIn(0.04f, 0.84f),
+                                        top = minY.coerceIn(0.08f, 0.80f),
+                                        width = bw.coerceAtMost(0.96f - minX),
+                                        height = bh.coerceAtMost(0.92f - minY)
+                                    )
+                                },
+                                onDragEnd = {
+                                    dragStartNorm = null
+                                }
+                            )
+                        }
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(46.dp)
-                                .clip(CircleShape)
-                                .background(FacebookBlue),
-                            contentAlignment = Alignment.Center
+                    // 1. Captured Image Displayed in the SAM Image Editor
+                    Image(
+                        bitmap = editorBitmap.asImageBitmap(),
+                        contentDescription = "Captured Image in SAM Editor",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // 2. Real-Time Non-Square SAM Contour Mask + Interactive Box & Point Prompts
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        if (hasActivePrompts) {
+                            drawPreciseSamContourHighlight(
+                                contourPoints = computedContour,
+                                isLocked = true,
+                                dimOutsideBackdrop = true
+                            )
+                        }
+
+                        // Draw interactive SAM bounding box & corner handles if active
+                        val box = interactiveBox
+                        if (box != null) {
+                            drawSamInteractiveBox(box)
+                        }
+
+                        // Draw interactive positive (+) foreground points
+                        positivePoints.forEach { pt ->
+                            drawSamPromptPoint(
+                                point = pt,
+                                isPositive = true
+                            )
+                        }
+
+                        // Draw interactive negative (-) exclusion points
+                        negativePoints.forEach { pt ->
+                            drawSamPromptPoint(
+                                point = pt,
+                                isPositive = false
+                            )
+                        }
+                    }
+
+                    // 3. Floating SAM Status Pill on the Segmented Contour
+                    if (hasActivePrompts) {
+                        val minContourX = computedContour.minOfOrNull { it.x } ?: computedBox.left
+                        val minContourY = computedContour.minOfOrNull { it.y } ?: computedBox.top
+                        val labelXDp = (viewW * minContourX).coerceIn(16.dp, (viewW - 240.dp).coerceAtLeast(16.dp))
+                        val labelYDp = (viewH * minContourY - 44.dp).coerceIn(148.dp, (viewH - 230.dp).coerceAtLeast(148.dp))
+
+                        Surface(
+                            modifier = Modifier.offset(x = labelXDp, y = labelYDp),
+                            color = FacebookBlue,
+                            shape = RoundedCornerShape(50),
+                            border = BorderStroke(1.5.dp, Color.White),
+                            shadowElevation = 6.dp
                         ) {
-                            if (uiState.isScanning) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.PhotoCamera,
-                                    contentDescription = "Capture & Segment",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (uiState.isScanning) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.TouchApp,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+
+                                val badgeText = when {
+                                    uiState.isScanning -> "Cutting & Auto-Labelling…"
+                                    latestCutItem != null -> "${latestCutItem.name} • ${BaggageGuardUiState.formatWeight(latestCutItem.weightKg)} kg"
+                                    else -> "SAM Mask (${positivePoints.size} pt${if (positivePoints.size == 1) "" else "s"}${if (interactiveBox != null) " + Box" else ""})"
+                                }
+
+                                Text(
+                                    text = badgeText,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (uiState.isScanning) {
-                                    "Segmenting & Cutting Contour…"
-                                } else {
-                                    "Capture & Segment Object"
+                    }
+                }
+
+                // 4. Top SAM Image Editor Header + Interactive Point/Box Tool Selector Bar
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Editor Header Row
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = DashboardCardWhite.copy(alpha = 0.96f),
+                        shape = RoundedCornerShape(50),
+                        border = BorderStroke(1.dp, DashboardBorderLight),
+                        shadowElevation = 6.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                IconButton(
+                                    onClick = onNavigateBack,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(DashboardSurfaceLight)
+                                        .border(1.dp, DashboardBorderLight, CircleShape)
+                                        .testTag("fullscreen_camera_back_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to Dashboard",
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                Column {
+                                    Text(
+                                        text = "SAM Image Editor",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                    )
+                                    Text(
+                                        text = "Tap points (+) or drag box, then tap Cut",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontSize = 10.sp,
+                                            color = TextSecondary
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Undo last point/box prompt
+                                IconButton(
+                                    onClick = {
+                                        if (promptHistory.isNotEmpty()) {
+                                            when (val last = promptHistory.removeAt(promptHistory.lastIndex)) {
+                                                is SamPromptHistoryEntry.PositivePoint -> positivePoints.remove(last.point)
+                                                is SamPromptHistoryEntry.NegativePoint -> negativePoints.remove(last.point)
+                                                is SamPromptHistoryEntry.BoxPrompt -> interactiveBox = last.previousBox
+                                            }
+                                            hasCutCurrentImage = false
+                                        }
+                                    },
+                                    enabled = promptHistory.isNotEmpty(),
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("sam_editor_undo_button")
+                                        .clip(CircleShape)
+                                        .background(DashboardSurfaceLight)
+                                        .border(1.dp, DashboardBorderLight, CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                                        contentDescription = "Undo Prompt",
+                                        tint = if (promptHistory.isNotEmpty()) TextPrimary else TextSecondary,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+
+                                // Clear all points & boxes
+                                IconButton(
+                                    onClick = {
+                                        positivePoints.clear()
+                                        negativePoints.clear()
+                                        interactiveBox = null
+                                        promptHistory.clear()
+                                        hasCutCurrentImage = false
+                                    },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("sam_editor_reset_button")
+                                        .clip(CircleShape)
+                                        .background(DashboardSurfaceLight)
+                                        .border(1.dp, DashboardBorderLight, CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Reset Prompts",
+                                        tint = FacebookBlue,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+
+                                // Retake photo (back to live camera)
+                                OutlinedButton(
+                                    onClick = {
+                                        workflowStep = CameraEditorWorkflowStep.CAPTURE_CAMERA
+                                        hasCutCurrentImage = false
+                                    },
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("sam_editor_retake_button"),
+                                    shape = RoundedCornerShape(50),
+                                    border = BorderStroke(1.dp, DashboardBorderLight),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PhotoCamera,
+                                        contentDescription = "Retake Photo",
+                                        tint = FacebookBlue,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Retake",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = FacebookBlue
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Interactive SAM Tool Selector Pills (+ Point, - Exclude, Box)
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = DashboardCardWhite.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(50),
+                        border = BorderStroke(1.dp, DashboardBorderLight),
+                        shadowElevation = 4.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SamToolChipButton(
+                                label = "+ Point (${positivePoints.size})",
+                                icon = Icons.Default.AddCircleOutline,
+                                selected = activePromptTool == SamEditorPromptTool.ADD_POINT,
+                                activeColor = FacebookBlue,
+                                testTag = "sam_tool_add_point",
+                                onClick = { activePromptTool = SamEditorPromptTool.ADD_POINT },
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            SamToolChipButton(
+                                label = "- Exclude (${negativePoints.size})",
+                                icon = Icons.Default.RemoveCircleOutline,
+                                selected = activePromptTool == SamEditorPromptTool.EXCLUDE_POINT,
+                                activeColor = CrimsonAlert,
+                                testTag = "sam_tool_exclude_point",
+                                onClick = { activePromptTool = SamEditorPromptTool.EXCLUDE_POINT },
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            SamToolChipButton(
+                                label = if (interactiveBox != null) "Box (Active)" else "Draw Box",
+                                icon = Icons.Default.CropFree,
+                                selected = activePromptTool == SamEditorPromptTool.DRAW_BOX,
+                                activeColor = EmeraldSafe,
+                                testTag = "sam_tool_draw_box",
+                                onClick = { activePromptTool = SamEditorPromptTool.DRAW_BOX },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    if (!uiState.aiError.isNullOrBlank()) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("ai_scan_error_banner"),
+                            color = Color(0xFFFEF2F2),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, CrimsonAlert)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.WarningAmber,
+                                    contentDescription = null,
+                                    tint = CrimsonAlert,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = uiState.aiError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CrimsonAlert,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = onDismissAiError,
+                                    modifier = Modifier.size(26.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Dismiss error",
+                                        tint = CrimsonAlert,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 5. Bottom Card: Shows "Cut Object" Button & Cutout Result Preview
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    color = DashboardCardWhite.copy(alpha = 0.97f),
+                    shape = RoundedCornerShape(22.dp),
+                    border = BorderStroke(1.dp, DashboardBorderLight),
+                    shadowElevation = 8.dp
+                ) {
+                    if (latestCutItem != null && !latestCutItem.imageUri.isNullOrBlank()) {
+                        // Cutout completed for the current image: show cutout sticker + Re-Cut / Done actions
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            SegmentedItemThumbnail(
+                                imageUri = latestCutItem.imageUri,
+                                itemName = latestCutItem.name,
+                                sizeDp = 58.dp
+                            )
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = EmeraldSafe,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "SAM CUTOUT SAVED",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp,
+                                            color = FacebookBlue
+                                        )
+                                    )
+                                }
+                                Text(
+                                    text = latestCutItem.name,
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${BaggageGuardUiState.formatWeight(latestCutItem.weightKg)} kg • Added to Dashboard list",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    hasCutCurrentImage = false
                                 },
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
+                                shape = RoundedCornerShape(50),
+                                border = BorderStroke(1.dp, DashboardBorderLight),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "Edit",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = FacebookBlue
+                                    )
                                 )
-                            )
-                            Text(
-                                text = "Captures image first, traces exact shape, cuts & labels",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontSize = 11.sp,
-                                    color = TextSecondary
+                            }
+
+                            Button(
+                                onClick = onNavigateBack,
+                                modifier = Modifier.testTag("scan_gear_button"),
+                                shape = RoundedCornerShape(50),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = FacebookBlue,
+                                    contentColor = Color.White
+                                ),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "Done",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
                                 )
-                            )
+                            }
+                        }
+                    } else {
+                        // Interactive SAM Editor Bottom Bar with prominent "Cut Object" Button
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (hasActivePrompts) {
+                                        "SAM Contour Ready to Cut"
+                                    } else {
+                                        "Tap Object or Draw Box"
+                                    },
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                )
+                                Text(
+                                    text = if (hasActivePrompts) {
+                                        "${positivePoints.size} include pt • ${negativePoints.size} exclude pt${if (interactiveBox != null) " • 1 box" else ""}"
+                                    } else {
+                                        "Tap + Point or drag Box around the item to enable Cut"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Button(
+                                onClick = {
+                                    if (!uiState.isScanning) {
+                                        if (!hasActivePrompts) {
+                                            val fallbackPt = NormalizedPoint(0.5f, 0.5f)
+                                            positivePoints.add(fallbackPt)
+                                            promptHistory.add(SamPromptHistoryEntry.PositivePoint(fallbackPt))
+                                        }
+                                        hasCutCurrentImage = true
+                                        if (onCutWithInteractiveMask != null) {
+                                            onCutWithInteractiveMask(
+                                                editorBitmap,
+                                                computedBox,
+                                                computedContour
+                                            )
+                                        } else {
+                                            onScanCameraFrame(editorBitmap)
+                                        }
+                                    }
+                                },
+                                enabled = !uiState.isScanning,
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("scan_gear_button"),
+                                shape = RoundedCornerShape(50),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = FacebookBlue,
+                                    contentColor = Color.White
+                                ),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                            ) {
+                                if (uiState.isScanning) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Cutting…",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCut,
+                                        contentDescription = "Cut Segmented Object",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Cut Object",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SamToolChipButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: Boolean,
+    activeColor: Color,
+    testTag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .testTag(testTag),
+        color = if (selected) activeColor else DashboardSurfaceLight,
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(
+            1.dp,
+            if (selected) activeColor else DashboardBorderLight
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (selected) Color.White else activeColor,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) Color.White else TextPrimary
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -966,7 +1390,7 @@ fun SegmentationViewportCard(
                 )
             ) {
                 Text(
-                    text = "Capture & Segment Item",
+                    text = "Capture & Open SAM Editor",
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontWeight = FontWeight.Bold,
                         color = Color.White
@@ -978,99 +1402,103 @@ fun SegmentationViewportCard(
 }
 
 /**
- * Analyzes a camera frame to detect the foreground object's bounding box, its 36-point non-rectangular
- * silhouette contour, and a 16-point perceptual color signature.
+ * Draws an interactive SAM bounding box with draggable-style corner handles in the Image Editor.
  */
-private fun analyzeLiveHoverFrame(bitmap: Bitmap): HoverDetectionSample {
-    val w = bitmap.width
-    val h = bitmap.height
-    val signature = IntArray(16)
-    var idx = 0
-    for (gy in 0 until 4) {
-        val py = ((gy + 1) * h / 5).coerceIn(0, h - 1)
-        for (gx in 0 until 4) {
-            val px = ((gx + 1) * w / 5).coerceIn(0, w - 1)
-            val c = bitmap.getPixel(px, py)
-            val luma = (android.graphics.Color.red(c) * 30 +
-                android.graphics.Color.green(c) * 59 +
-                android.graphics.Color.blue(c) * 11) / 100
-            signature[idx++] = luma
-        }
-    }
+private fun DrawScope.drawSamInteractiveBox(box: NormalizedRect) {
+    val left = box.left * size.width
+    val top = box.top * size.height
+    val w = box.width * size.width
+    val h = box.height * size.height
 
-    var bgR = 0
-    var bgG = 0
-    var bgB = 0
-    var bgSamples = 0
-    val stepX = (w / 14).coerceAtLeast(1)
-    val stepY = (h / 14).coerceAtLeast(1)
-
-    for (x in 0 until w step stepX) {
-        val topPx = bitmap.getPixel(x, (h * 0.08f).toInt().coerceIn(0, h - 1))
-        val botPx = bitmap.getPixel(x, (h * 0.92f).toInt().coerceIn(0, h - 1))
-        bgR += android.graphics.Color.red(topPx) + android.graphics.Color.red(botPx)
-        bgG += android.graphics.Color.green(topPx) + android.graphics.Color.green(botPx)
-        bgB += android.graphics.Color.blue(topPx) + android.graphics.Color.blue(botPx)
-        bgSamples += 2
-    }
-    val avgR = bgR / bgSamples.coerceAtLeast(1)
-    val avgG = bgG / bgSamples.coerceAtLeast(1)
-    val avgB = bgB / bgSamples.coerceAtLeast(1)
-
-    var minX = w
-    var maxX = 0
-    var minY = h
-    var maxY = 0
-    var fgCount = 0
-
-    val xStart = (w * 0.14f).toInt()
-    val xEnd = (w * 0.86f).toInt()
-    val yStart = (h * 0.18f).toInt()
-    val yEnd = (h * 0.80f).toInt()
-
-    for (y in yStart until yEnd step stepY) {
-        for (x in xStart until xEnd step stepX) {
-            val c = bitmap.getPixel(x, y)
-            val diff = abs(android.graphics.Color.red(c) - avgR) +
-                abs(android.graphics.Color.green(c) - avgG) +
-                abs(android.graphics.Color.blue(c) - avgB)
-            if (diff > 42) {
-                if (x < minX) minX = x
-                if (x > maxX) maxX = x
-                if (y < minY) minY = y
-                if (y > maxY) maxY = y
-                fgCount++
-            }
-        }
-    }
-
-    val box = if (fgCount >= 5 && maxX > minX && maxY > minY) {
-        val l = (minX.toFloat() / w - 0.03f).coerceIn(0.10f, 0.52f)
-        val t = (minY.toFloat() / h - 0.03f).coerceIn(0.16f, 0.52f)
-        val bw = ((maxX - minX).toFloat() / w + 0.06f).coerceIn(0.28f, (0.88f - l).coerceAtLeast(0.28f))
-        val bh = ((maxY - minY).toFloat() / h + 0.06f).coerceIn(0.26f, (0.80f - t).coerceAtLeast(0.26f))
-        NormalizedRect(l, t, bw, bh)
-    } else {
-        NormalizedRect(0.20f, 0.24f, 0.60f, 0.46f)
-    }
-
-    val contourPoints = BaggageAsyncStorage.extractPreciseObjectContour(bitmap, box)
-
-    return HoverDetectionSample(
-        box = box,
-        contourPoints = contourPoints,
-        signature = signature,
-        hasSalientObject = true
+    // Outer white contrast frame
+    drawRoundRect(
+        color = Color.White.copy(alpha = 0.9f),
+        topLeft = Offset(left, top),
+        size = Size(w, h),
+        cornerRadius = CornerRadius(12f, 12f),
+        style = Stroke(width = 4.5f)
     )
+
+    // Inner Emerald/Blue SAM Box border
+    drawRoundRect(
+        color = EmeraldSafe,
+        topLeft = Offset(left, top),
+        size = Size(w, h),
+        cornerRadius = CornerRadius(12f, 12f),
+        style = Stroke(width = 2.5f)
+    )
+
+    // Corner handles
+    val corners = listOf(
+        Offset(left, top),
+        Offset(left + w, top),
+        Offset(left, top + h),
+        Offset(left + w, top + h)
+    )
+    corners.forEach { corner ->
+        drawCircle(
+            color = Color.White,
+            radius = 9f,
+            center = corner
+        )
+        drawCircle(
+            color = EmeraldSafe,
+            radius = 6f,
+            center = corner
+        )
+    }
 }
 
-private fun computeSignatureDelta(a: IntArray, b: IntArray): Int {
-    var sum = 0
-    val len = minOf(a.size, b.size)
-    for (i in 0 until len) {
-        sum += abs(a[i] - b[i])
+/**
+ * Draws an interactive SAM positive (`+`) or negative (`-`) prompt point marker on the Image Editor canvas.
+ */
+private fun DrawScope.drawSamPromptPoint(
+    point: NormalizedPoint,
+    isPositive: Boolean
+) {
+    val cx = point.x * size.width
+    val cy = point.y * size.height
+    val fillColor = if (isPositive) FacebookBlue else CrimsonAlert
+
+    // Outer glow halo
+    drawCircle(
+        color = fillColor.copy(alpha = 0.28f),
+        radius = 22f,
+        center = Offset(cx, cy)
+    )
+
+    // Crisp white outer ring
+    drawCircle(
+        color = Color.White,
+        radius = 14f,
+        center = Offset(cx, cy)
+    )
+
+    // Colored SAM prompt core
+    drawCircle(
+        color = fillColor,
+        radius = 11f,
+        center = Offset(cx, cy)
+    )
+
+    // Inner '+' or '-' glyph
+    val arm = 5.5f
+    drawLine(
+        color = Color.White,
+        start = Offset(cx - arm, cy),
+        end = Offset(cx + arm, cy),
+        strokeWidth = 2.8f,
+        cap = StrokeCap.Round
+    )
+    if (isPositive) {
+        drawLine(
+            color = Color.White,
+            start = Offset(cx, cy - arm),
+            end = Offset(cx, cy + arm),
+            strokeWidth = 2.8f,
+            cap = StrokeCap.Round
+        )
     }
-    return sum / len.coerceAtLeast(1)
 }
 
 /**
@@ -1091,17 +1519,17 @@ private fun DrawScope.drawPreciseSamContourHighlight(
     )
     val composePath = androidPath.asComposePath()
 
-    // Subtle dark backdrop outside the segmented object contour when image is captured
+    // Subtle dark backdrop outside the segmented object contour when in SAM Image Editor
     if (dimOutsideBackdrop) {
         clipPath(composePath, clipOp = ClipOp.Difference) {
-            drawRect(color = Color.Black.copy(alpha = 0.28f))
+            drawRect(color = Color.Black.copy(alpha = 0.34f))
         }
     }
 
     // Soft solid SAM mask fill strictly inside the object's silhouette contour
     drawPath(
         path = composePath,
-        color = FacebookBlue.copy(alpha = if (isLocked) 0.22f else 0.12f)
+        color = FacebookBlue.copy(alpha = if (isLocked) 0.24f else 0.14f)
     )
 
     // Crisp white SAM cutout sticker halo following the exact object contour
