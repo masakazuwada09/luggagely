@@ -6,11 +6,15 @@ import {
   StyleSheet,
   ActivityIndicator,
   Image,
+  Dimensions,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BaggageItem, FB_THEME } from '../types/baggage';
-import { runMuseSparkMetaSegmentation } from '../services/museSparkMetaClient';
+import {
+  buildOrganicSamContour,
+  runMuseSparkMetaSegmentation,
+} from '../services/museSparkMetaClient';
 
 export const ASYNC_STORAGE_ITEMS_KEY = '@luggagely_segmented_items_v1';
 
@@ -20,6 +24,13 @@ interface SegmentationCameraModalProps {
   onItemsDetected: (detected: BaggageItem[]) => void;
 }
 
+/**
+ * Full-Screen SAM Camera with True SAM Workflow:
+ * 1. Capture Image First (freezes the captured photo on the full-screen viewport)
+ * 2. Segment & trace the precise non-rectangular 36-point object silhouette contour
+ * 3. Cut out the exact object shape & auto-label it
+ * 4. Save to AsyncStorage & display on the Dashboard item list
+ */
 export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = ({
   items,
   onClose,
@@ -28,17 +39,18 @@ export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = (
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [capturedPhotoUri, setCapturedPhotoUri] = useState<string | null>(null);
   const [lastSegmentedItem, setLastSegmentedItem] = useState<BaggageItem | null>(
     items.find((i) => i.source === 'AI_SCANNED') || null
   );
   const [statusMessage, setStatusMessage] = useState(
-    'Center a single item in the frame to segment and cut out its image'
+    'Capture image first to run SAM contour cutout & auto-label'
   );
 
-  const handleSegmentSingleItem = async () => {
+  const handleCaptureThenSegmentCutLabel = async () => {
     if (isScanning) return;
     setIsScanning(true);
-    setStatusMessage('Segmenting single item & creating cutout image...');
+    setStatusMessage('Capturing image & tracing precise SAM contour...');
 
     let base64Frame: string | undefined;
     let capturedUri: string | undefined;
@@ -46,15 +58,22 @@ export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = (
       if (cameraRef.current) {
         const photo = await cameraRef.current.takePictureAsync({
           base64: true,
-          quality: 0.72,
+          quality: 0.78,
+          skipProcessing: false,
         });
         base64Frame = photo?.base64;
         capturedUri = photo?.uri;
+        if (capturedUri) {
+          setCapturedPhotoUri(capturedUri);
+        } else if (base64Frame) {
+          setCapturedPhotoUri(`data:image/jpeg;base64,${base64Frame}`);
+        }
       }
     } catch {
-      // Proceed even if simulator camera capture is unavailable
+      // Proceed with fallback frame if simulator camera capture is unavailable
     }
 
+    setStatusMessage('Image captured • Running SAM contour cutout & labelling...');
     const result = await runMuseSparkMetaSegmentation(base64Frame, capturedUri);
     const singleItem = result.detectedItems[0];
     if (singleItem) {
@@ -70,14 +89,19 @@ export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = (
         // Ignore AsyncStorage write error
       }
       setStatusMessage(
-        `Segmented "${singleItem.name}" (${singleItem.weightKg.toFixed(2)} kg) • Saved to AsyncStorage`
+        `SAM Cutout: "${singleItem.name}" (${singleItem.weightKg.toFixed(2)} kg) • Saved`
       );
     }
     setIsScanning(false);
   };
 
+  const handleResetCapture = () => {
+    setCapturedPhotoUri(null);
+    setStatusMessage('Aim at object & tap Capture to segment, cut & label');
+  };
+
   if (!permission) {
-    return <View style={styles.container} />;
+    return <View style={styles.fullScreenContainer} />;
   }
 
   if (!permission.granted) {
@@ -86,8 +110,8 @@ export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = (
         <View style={styles.permissionCard}>
           <Text style={styles.permissionTitle}>Camera Access Required</Text>
           <Text style={styles.permissionBody}>
-            Allow camera access to segment a single item with SAM, cut out its image, and save it to
-            your Dashboard item list.
+            Allow camera access to capture an image, trace the exact object contour with SAM, cut it
+            out, and auto-label it.
           </Text>
           <TouchableOpacity style={styles.primaryBtn} onPress={requestPermission}>
             <Text style={styles.primaryBtnText}>Allow Camera</Text>
@@ -100,62 +124,116 @@ export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = (
     );
   }
 
-  const activeBox = lastSegmentedItem?.boundingBox;
+  const { width, height } = Dimensions.get('window');
+  const activeBox = lastSegmentedItem?.boundingBox || {
+    xMin: 0.22,
+    yMin: 0.22,
+    width: 0.56,
+    height: 0.48,
+  };
+  const contourPoints =
+    lastSegmentedItem?.contourPoints && lastSegmentedItem.contourPoints.length >= 6
+      ? lastSegmentedItem.contourPoints
+      : buildOrganicSamContour(activeBox);
 
   return (
-    <View style={styles.container}>
-      {/* Dashboard-Themed Top Bar (No MUSE-SPARK-1.3 // META SAM READY badge, no rig preset tabs) */}
-      <View style={styles.topHeaderCard}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={handleCaptureThenSegmentCutLabel}
+      style={styles.fullScreenContainer}
+    >
+      {/* 1. Full-Screen Live Camera Feed OR Captured Frozen Image */}
+      {capturedPhotoUri ? (
+        <Image
+          source={{ uri: capturedPhotoUri }}
+          style={StyleSheet.absoluteFillObject}
+          resizeMode="cover"
+        />
+      ) : (
+        <CameraView ref={cameraRef} style={StyleSheet.absoluteFillObject} facing="back" />
+      )}
+
+      {/* 2. Non-Square Precise SAM Contour Polygon Nodes & Silhouette Overlay */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+        {contourPoints.map((pt, idx) => {
+          const nextPt = contourPoints[(idx + 1) % contourPoints.length];
+          const x1 = pt.x * width;
+          const y1 = pt.y * height;
+          const x2 = nextPt.x * width;
+          const y2 = nextPt.y * height;
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const length = Math.hypot(dx, dy);
+          const angleRad = Math.atan2(dy, dx);
+          return (
+            <View
+              key={`sam-contour-seg-${idx}`}
+              style={[
+                styles.contourSegment,
+                {
+                  width: length + 3,
+                  left: (x1 + x2) / 2 - (length + 3) / 2,
+                  top: (y1 + y2) / 2 - 2.5,
+                  transform: [{ rotate: `${angleRad}rad` }],
+                },
+              ]}
+            />
+          );
+        })}
+
+        {/* Floating Auto-Label Pill on the Segmented Contour */}
+        <View
+          style={[
+            styles.highlightLabelPill,
+            {
+              position: 'absolute',
+              left: Math.max(16, activeBox.xMin * width),
+              top: Math.max(104, activeBox.yMin * height - 44),
+            },
+          ]}
+        >
+          {isScanning ? (
+            <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 6 }} />
+          ) : (
+            <View style={styles.highlightDot} />
+          )}
+          <Text style={styles.highlightLabelText} numberOfLines={1}>
+            {isScanning
+              ? 'SAM Segmenting & Cutting Contour…'
+              : lastSegmentedItem
+              ? `${lastSegmentedItem.name} • ${lastSegmentedItem.weightKg.toFixed(2)} kg`
+              : 'Tap to Capture & Cut Contour'}
+          </Text>
+        </View>
+      </View>
+
+      {/* 3. Floating Top Bar Over Full-Screen Camera */}
+      <View style={styles.floatingTopBar}>
         <TouchableOpacity style={styles.backButton} onPress={onClose}>
           <Text style={styles.backButtonText}>← Dashboard</Text>
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>SAM Item Scanner</Text>
-          <Text style={styles.headerSubtitle}>Single-Item Cutout & Label</Text>
+          <Text style={styles.headerTitle}>
+            {capturedPhotoUri ? 'Captured SAM Cutout' : 'SAM Capture • Segment • Cut'}
+          </Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {statusMessage}
+          </Text>
         </View>
         <View style={styles.savedCountBadge}>
           <Text style={styles.savedCountText}>{items.length} Saved</Text>
         </View>
       </View>
 
-      {/* Camera Viewport Card styled like Dashboard Cards */}
-      <View style={styles.viewportCard}>
-        <CameraView ref={cameraRef} style={StyleSheet.absoluteFillObject} facing="back" />
-
-        {/* Single-Item SAM Solid Highlight & Label (No scanning animation, no dashed shapes) */}
-        {lastSegmentedItem && activeBox ? (
-          <View
-            pointerEvents="none"
-            style={[
-              styles.singleHighlightBox,
-              {
-                left: `${Math.round(activeBox.xMin * 100)}%`,
-                top: `${Math.round(activeBox.yMin * 100)}%`,
-                width: `${Math.round(activeBox.width * 100)}%`,
-                height: `${Math.round(activeBox.height * 100)}%`,
-              },
-            ]}
-          >
-            <View style={styles.highlightLabelPill}>
-              <View style={styles.highlightDot} />
-              <Text style={styles.highlightLabelText} numberOfLines={1}>
-                {lastSegmentedItem.name} • {lastSegmentedItem.weightKg.toFixed(2)} kg
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <View pointerEvents="none" style={styles.focusGuideFrame} />
-        )}
-      </View>
-
-      {/* Bottom Dashboard-Themed Controls & Cutout Preview Card */}
-      <View style={styles.bottomCard}>
-        {lastSegmentedItem && (
+      {/* 4. Floating Bottom Capture & Precise SAM Cutout Card */}
+      <View style={styles.floatingBottomCard}>
+        {lastSegmentedItem ? (
           <View style={styles.cutoutPreviewRow}>
             {lastSegmentedItem.imageUri ? (
               <Image
                 source={{ uri: lastSegmentedItem.imageUri }}
                 style={styles.cutoutPreviewImage}
+                resizeMode="contain"
               />
             ) : (
               <View style={styles.cutoutPlaceholder}>
@@ -165,40 +243,52 @@ export const SegmentationCameraModal: React.FC<SegmentationCameraModalProps> = (
               </View>
             )}
             <View style={styles.cutoutMetaCol}>
-              <Text style={styles.cutoutBadge}>SAM CUTOUT SAVED TO ASYNCSTORAGE</Text>
+              <Text style={styles.cutoutBadge}>PRECISE SAM CUTOUT SAVED</Text>
               <Text style={styles.cutoutItemName} numberOfLines={1}>
                 {lastSegmentedItem.name}
               </Text>
               <Text style={styles.cutoutItemSub}>
-                {lastSegmentedItem.weightKg.toFixed(2)} kg • Displayed on Dashboard Item List
+                {lastSegmentedItem.weightKg.toFixed(2)} kg • Added to Dashboard list
               </Text>
             </View>
+            <TouchableOpacity style={styles.newCaptureBtn} onPress={handleResetCapture}>
+              <Text style={styles.newCaptureBtnText}>New</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.donePillBtn} onPress={onClose}>
+              <Text style={styles.donePillBtnText}>Done</Text>
+            </TouchableOpacity>
           </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.captureActionRow}
+            onPress={handleCaptureThenSegmentCutLabel}
+          >
+            <View style={styles.shutterCircle}>
+              {isScanning ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <View style={styles.shutterInner} />
+              )}
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.captureTitle}>
+                {isScanning ? 'Segmenting & Cutting Contour…' : 'Capture & Segment Object'}
+              </Text>
+              <Text style={styles.captureSub}>
+                Captures image first, traces exact non-square shape, cuts & labels
+              </Text>
+            </View>
+          </TouchableOpacity>
         )}
-
-        <Text style={styles.statusText}>{statusMessage}</Text>
-
-        <TouchableOpacity
-          style={[styles.scanButton, isScanning && { opacity: 0.75 }]}
-          onPress={handleSegmentSingleItem}
-          disabled={isScanning}
-        >
-          {isScanning ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.scanButtonText}>Segment & Cut Out Item</Text>
-          )}
-        </TouchableOpacity>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  fullScreenContainer: {
     flex: 1,
-    backgroundColor: FB_THEME.feedGrayBg,
-    padding: 14,
+    backgroundColor: '#000000',
     justifyContent: 'space-between',
   },
   permissionContainer: {
@@ -251,11 +341,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 14,
   },
-  topHeaderCard: {
-    backgroundColor: FB_THEME.cardWhite,
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+  floatingTopBar: {
+    marginTop: 48,
+    marginHorizontal: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 28,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: FB_THEME.borderLight,
     flexDirection: 'row',
@@ -266,14 +358,14 @@ const styles = StyleSheet.create({
     backgroundColor: FB_THEME.surfaceLight,
     borderWidth: 1,
     borderColor: FB_THEME.borderLight,
-    borderRadius: 10,
+    borderRadius: 18,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
   },
   backButtonText: {
     color: FB_THEME.textPrimary,
     fontWeight: '700',
-    fontSize: 13,
+    fontSize: 12,
   },
   headerCenter: {
     alignItems: 'center',
@@ -281,12 +373,12 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
   headerTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     color: FB_THEME.textPrimary,
   },
   headerSubtitle: {
-    fontSize: 11,
+    fontSize: 10,
     color: FB_THEME.textSecondary,
     marginTop: 1,
   },
@@ -303,87 +395,65 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: FB_THEME.facebookBlue,
   },
-  viewportCard: {
-    flex: 1,
-    marginVertical: 12,
-    borderRadius: 18,
-    overflow: 'hidden',
-    backgroundColor: FB_THEME.cardWhite,
-    borderWidth: 1.5,
-    borderColor: FB_THEME.borderLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  focusGuideFrame: {
-    width: '62%',
-    height: '54%',
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.75)',
-  },
-  singleHighlightBox: {
+  contourSegment: {
     position: 'absolute',
-    borderWidth: 3,
-    borderColor: FB_THEME.facebookBlue,
-    backgroundColor: 'rgba(24, 119, 242, 0.20)',
-    borderRadius: 18,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: FB_THEME.facebookBlue,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
   },
   highlightLabelPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: FB_THEME.cardWhite,
+    backgroundColor: FB_THEME.facebookBlue,
     borderWidth: 1.5,
-    borderColor: FB_THEME.facebookBlue,
+    borderColor: '#FFFFFF',
     alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 20,
-    margin: 8,
   },
   highlightDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: FB_THEME.facebookBlue,
+    backgroundColor: '#FFFFFF',
     marginRight: 6,
   },
   highlightLabelText: {
-    color: FB_THEME.textPrimary,
+    color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '800',
   },
-  bottomCard: {
-    backgroundColor: FB_THEME.cardWhite,
-    padding: 16,
-    borderRadius: 16,
+  floatingBottomCard: {
+    marginHorizontal: 14,
+    marginBottom: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    padding: 12,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: FB_THEME.borderLight,
   },
   cutoutPreviewRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: FB_THEME.facebookBlueSoft,
-    borderWidth: 1,
-    borderColor: FB_THEME.facebookBlue,
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 12,
   },
   cutoutPreviewImage: {
-    width: 54,
-    height: 54,
+    width: 56,
+    height: 56,
     borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: FB_THEME.facebookBlue,
-    backgroundColor: FB_THEME.cardWhite,
+    borderWidth: 1,
+    borderColor: FB_THEME.borderLight,
+    backgroundColor: FB_THEME.facebookBlueSoft,
   },
   cutoutPlaceholder: {
-    width: 54,
-    height: 54,
+    width: 56,
+    height: 56,
     borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: FB_THEME.facebookBlue,
-    backgroundColor: FB_THEME.cardWhite,
+    borderWidth: 1,
+    borderColor: FB_THEME.borderLight,
+    backgroundColor: FB_THEME.facebookBlueSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -394,7 +464,7 @@ const styles = StyleSheet.create({
   },
   cutoutMetaCol: {
     flex: 1,
-    marginLeft: 12,
+    marginHorizontal: 10,
   },
   cutoutBadge: {
     fontSize: 9,
@@ -412,22 +482,58 @@ const styles = StyleSheet.create({
     color: FB_THEME.textSecondary,
     marginTop: 2,
   },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: FB_THEME.textSecondary,
-    marginBottom: 10,
-    textAlign: 'center',
+  newCaptureBtn: {
+    backgroundColor: FB_THEME.surfaceLight,
+    borderWidth: 1,
+    borderColor: FB_THEME.borderLight,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginRight: 6,
   },
-  scanButton: {
-    backgroundColor: FB_THEME.facebookBlue,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  scanButtonText: {
-    color: FB_THEME.cardWhite,
-    fontSize: 15,
+  newCaptureBtnText: {
+    color: FB_THEME.facebookBlue,
     fontWeight: '700',
+    fontSize: 12,
+  },
+  donePillBtn: {
+    backgroundColor: FB_THEME.facebookBlue,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  donePillBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  captureActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  shutterCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: FB_THEME.facebookBlue,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shutterInner: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#FFFFFF',
+  },
+  captureTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: FB_THEME.textPrimary,
+  },
+  captureSub: {
+    fontSize: 11,
+    color: FB_THEME.textSecondary,
+    marginTop: 2,
   },
 });

@@ -2,6 +2,11 @@ export type ItemSource = 'AI_SCANNED' | 'MANUAL_ENTRY';
 
 export type StudioTab = 'DASHBOARD' | 'MANIFEST' | 'CAMERA' | 'BOARDING' | 'SETTINGS' | 'PROFILE';
 
+export interface ContourPointNorm {
+  x: number;
+  y: number;
+}
+
 export interface BoundingBoxNorm {
   xMin: number;
   yMin: number;
@@ -17,6 +22,7 @@ export interface BaggageItem {
   source: ItemSource;
   confidence?: number;
   boundingBox?: BoundingBoxNorm;
+  contourPoints?: ContourPointNorm[];
   imageUri?: string;
   shiftableToPersonalItem: boolean;
 }

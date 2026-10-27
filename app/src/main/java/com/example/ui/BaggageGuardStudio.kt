@@ -305,7 +305,11 @@ fun BaggageGuardStudio(
             .fillMaxSize()
             .background(DashboardFeedGrayBg),
         containerColor = DashboardFeedGrayBg,
-        contentWindowInsets = WindowInsets.safeDrawing,
+        contentWindowInsets = if (currentTab == StudioTab.CAMERA) {
+            WindowInsets(0, 0, 0, 0)
+        } else {
+            WindowInsets.safeDrawing
+        },
         bottomBar = {
             if (currentTab != StudioTab.CAMERA) {
                 StickyBottomNavBar(
@@ -326,7 +330,13 @@ fun BaggageGuardStudio(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .then(
+                    if (currentTab == StudioTab.CAMERA) {
+                        Modifier
+                    } else {
+                        Modifier.padding(innerPadding)
+                    }
+                )
                 .imePadding()
         ) {
             val isExpandedScreen = maxWidth >= 840.dp

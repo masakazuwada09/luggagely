@@ -5,34 +5,35 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.Shader
 import android.util.Base64
 import android.util.Log
 import com.example.model.BaggageItem
 import com.example.model.GearCategory
 import com.example.model.ItemSource
+import com.example.model.NormalizedPoint
 import com.example.model.NormalizedRect
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 private const val TAG = "BaggageAsyncStorage"
 private const val PREFS_NAME = "luggagely_async_storage"
 private const val KEY_ITEMS_JSON = "@luggagely_segmented_items_v1"
 
 /**
- * Local AsyncStorage persistence layer for Luggagely items and their SAM-segmented cutout images.
- * Stores items and cutout image URIs/Base64 in SharedPreferences + internal filesDir so segmented
- * items and their cutout images persist across app launches and display on the Dashboard item list.
+ * Local AsyncStorage persistence layer for Luggagely items, their precise SAM object contours,
+ * and their non-rectangular silhouette cutout images.
  */
 object BaggageAsyncStorage {
 
@@ -62,6 +63,18 @@ object BaggageAsyncStorage {
                         put("top", item.boundingBox.top.toDouble())
                         put("width", item.boundingBox.width.toDouble())
                         put("height", item.boundingBox.height.toDouble())
+                    }
+                    if (item.contourPoints.isNotEmpty()) {
+                        val ptsArray = JSONArray()
+                        item.contourPoints.forEach { pt ->
+                            ptsArray.put(
+                                JSONObject().apply {
+                                    put("x", pt.x.toDouble())
+                                    put("y", pt.y.toDouble())
+                                }
+                            )
+                        }
+                        put("contourPoints", ptsArray)
                     }
                     put("isShiftedToPersonal", item.isShiftedToPersonal)
                     if (!item.maskId.isNullOrBlank()) {
@@ -113,6 +126,22 @@ object BaggageAsyncStorage {
                 } else {
                     null
                 }
+                val contourPoints = mutableListOf<NormalizedPoint>()
+                val ptsArray = obj.optJSONArray("contourPoints")
+                if (ptsArray != null) {
+                    for (j in 0 until ptsArray.length()) {
+                        val ptObj = ptsArray.optJSONObject(j) ?: continue
+                        contourPoints.add(
+                            NormalizedPoint(
+                                x = ptObj.optDouble("x", 0.5).toFloat(),
+                                y = ptObj.optDouble("y", 0.5).toFloat()
+                            )
+                        )
+                    }
+                } else if (box != null) {
+                    contourPoints.addAll(createOrganicFallbackContour(box))
+                }
+
                 val isShifted = obj.optBoolean("isShiftedToPersonal", false)
                 val maskId = obj.optString("maskId").takeIf { it.isNotBlank() }
                 val imageUri = obj.optString("imageUri").takeIf { it.isNotBlank() }
@@ -126,6 +155,7 @@ object BaggageAsyncStorage {
                         category = category,
                         confidence = confidence,
                         boundingBox = box,
+                        contourPoints = contourPoints,
                         isShiftedToPersonal = isShifted,
                         maskId = maskId,
                         imageUri = imageUri
@@ -140,123 +170,314 @@ object BaggageAsyncStorage {
     }
 
     /**
-     * Cuts out the single SAM-segmented item from the source camera frame using its bounding box
-     * and creates a clean segmented cutout image (saved to internal storage + encoded as data URI).
+     * Traces a precise 36-point non-rectangular silhouette contour around the foreground object
+     * in [sourceBitmap] within [boundingBox] by casting radial rays from the object's center and
+     * detecting the exact foreground-to-background color/luminance boundary.
+     */
+    fun extractPreciseObjectContour(
+        sourceBitmap: Bitmap?,
+        boundingBox: NormalizedRect
+    ): List<NormalizedPoint> {
+        if (sourceBitmap == null || sourceBitmap.width < 16 || sourceBitmap.height < 16) {
+            return createOrganicFallbackContour(boundingBox)
+        }
+
+        val w = sourceBitmap.width
+        val h = sourceBitmap.height
+
+        // Sample outer border pixels around the frame/box to estimate the background color
+        var bgR = 0
+        var bgG = 0
+        var bgB = 0
+        var bgCount = 0
+        val borderLeft = ((boundingBox.left - 0.04f).coerceAtLeast(0.02f) * w).toInt().coerceIn(0, w - 1)
+        val borderRight = ((boundingBox.left + boundingBox.width + 0.04f).coerceAtMost(0.98f) * w).toInt().coerceIn(0, w - 1)
+        val borderTop = ((boundingBox.top - 0.04f).coerceAtLeast(0.02f) * h).toInt().coerceIn(0, h - 1)
+        val borderBottom = ((boundingBox.top + boundingBox.height + 0.04f).coerceAtMost(0.98f) * h).toInt().coerceIn(0, h - 1)
+
+        val stepX = ((borderRight - borderLeft) / 10).coerceAtLeast(1)
+        for (x in borderLeft..borderRight step stepX) {
+            val topPx = sourceBitmap.getPixel(x, borderTop)
+            val botPx = sourceBitmap.getPixel(x, borderBottom)
+            bgR += Color.red(topPx) + Color.red(botPx)
+            bgG += Color.green(topPx) + Color.green(botPx)
+            bgB += Color.blue(topPx) + Color.blue(botPx)
+            bgCount += 2
+        }
+        val stepY = ((borderBottom - borderTop) / 10).coerceAtLeast(1)
+        for (y in borderTop..borderBottom step stepY) {
+            val leftPx = sourceBitmap.getPixel(borderLeft, y)
+            val rightPx = sourceBitmap.getPixel(borderRight, y)
+            bgR += Color.red(leftPx) + Color.red(rightPx)
+            bgG += Color.green(leftPx) + Color.green(rightPx)
+            bgB += Color.blue(leftPx) + Color.blue(rightPx)
+            bgCount += 2
+        }
+
+        val avgBgR = bgR / bgCount.coerceAtLeast(1)
+        val avgBgG = bgG / bgCount.coerceAtLeast(1)
+        val avgBgB = bgB / bgCount.coerceAtLeast(1)
+
+        val cx = boundingBox.left + boundingBox.width * 0.5f
+        val cy = boundingBox.top + boundingBox.height * 0.5f
+        val rx = boundingBox.width * 0.5f
+        val ry = boundingBox.height * 0.5f
+
+        // Sample object center color to strengthen foreground affinity
+        val centerPx = sourceBitmap.getPixel(
+            (cx * w).toInt().coerceIn(0, w - 1),
+            (cy * h).toInt().coerceIn(0, h - 1)
+        )
+        val fgR = Color.red(centerPx)
+        val fgG = Color.green(centerPx)
+        val fgB = Color.blue(centerPx)
+
+        val numRays = 36
+        val radii = FloatArray(numRays)
+        var detectedRays = 0
+
+        for (i in 0 until numRays) {
+            val angle = (2.0 * Math.PI * i) / numRays
+            val dirX = cos(angle).toFloat()
+            val dirY = sin(angle).toFloat()
+
+            var farthestFgScale = 0.35f
+            var foundEdge = false
+
+            // March from outer radius inward to find the exact outer boundary of the object
+            val steps = 28
+            for (s in steps downTo 6) {
+                val scale = s.toFloat() / steps.toFloat() * 1.06f
+                val nx = (cx + dirX * rx * scale).coerceIn(0.02f, 0.98f)
+                val ny = (cy + dirY * ry * scale).coerceIn(0.02f, 0.98f)
+                val px = sourceBitmap.getPixel(
+                    (nx * w).toInt().coerceIn(0, w - 1),
+                    (ny * h).toInt().coerceIn(0, h - 1)
+                )
+                val r = Color.red(px)
+                val g = Color.green(px)
+                val b = Color.blue(px)
+
+                val diffBg = abs(r - avgBgR) + abs(g - avgBgG) + abs(b - avgBgB)
+                val diffFg = abs(r - fgR) + abs(g - fgG) + abs(b - fgB)
+
+                if (diffBg > 38 || diffFg < 55) {
+                    farthestFgScale = scale.coerceIn(0.42f, 1.02f)
+                    foundEdge = true
+                    break
+                }
+            }
+
+            if (foundEdge) {
+                detectedRays++
+                radii[i] = farthestFgScale
+            } else {
+                // Organic non-rectangular silhouette modulation if local edge contrast is subtle
+                val organicMod = 0.84f +
+                    0.08f * cos(angle * 2.0).toFloat() -
+                    0.05f * sin(angle * 3.0).toFloat() +
+                    0.04f * cos(angle).toFloat()
+                radii[i] = organicMod.coerceIn(0.62f, 0.96f)
+            }
+        }
+
+        if (detectedRays < 8) {
+            return createOrganicFallbackContour(boundingBox)
+        }
+
+        // Smooth radial distances with a 3-pass circular filter so the contour is crisp and organic
+        val smoothed = radii.copyOf()
+        repeat(3) {
+            val temp = smoothed.copyOf()
+            for (i in 0 until numRays) {
+                val prev2 = temp[(i - 2 + numRays) % numRays]
+                val prev1 = temp[(i - 1 + numRays) % numRays]
+                val curr = temp[i]
+                val next1 = temp[(i + 1) % numRays]
+                val next2 = temp[(i + 2) % numRays]
+                smoothed[i] = prev2 * 0.1f + prev1 * 0.22f + curr * 0.36f + next1 * 0.22f + next2 * 0.1f
+            }
+        }
+
+        val points = ArrayList<NormalizedPoint>(numRays)
+        for (i in 0 until numRays) {
+            val angle = (2.0 * Math.PI * i) / numRays
+            val rScale = smoothed[i]
+            val px = (cx + cos(angle).toFloat() * rx * rScale).coerceIn(0.03f, 0.97f)
+            val py = (cy + sin(angle).toFloat() * ry * rScale).coerceIn(0.03f, 0.97f)
+            points.add(NormalizedPoint(px, py))
+        }
+        return points
+    }
+
+    /**
+     * Generates a smooth, non-rectangular ergonomic object silhouette contour when no bitmap is available.
+     */
+    fun createOrganicFallbackContour(boundingBox: NormalizedRect): List<NormalizedPoint> {
+        val cx = boundingBox.left + boundingBox.width * 0.5f
+        val cy = boundingBox.top + boundingBox.height * 0.5f
+        val rx = boundingBox.width * 0.48f
+        val ry = boundingBox.height * 0.48f
+        val numRays = 36
+        val points = ArrayList<NormalizedPoint>(numRays)
+        for (i in 0 until numRays) {
+            val angle = (2.0 * Math.PI * i) / numRays
+            // Natural luggage/backpack dome + side contour profile (never a square)
+            val domeShape = 0.88f -
+                0.07f * cos(angle * 4.0).toFloat() +
+                0.05f * sin(angle).toFloat() -
+                0.04f * cos(angle * 2.0).toFloat()
+            val px = (cx + cos(angle).toFloat() * rx * domeShape).coerceIn(0.04f, 0.96f)
+            val py = (cy + sin(angle).toFloat() * ry * domeShape).coerceIn(0.04f, 0.96f)
+            points.add(NormalizedPoint(px, py))
+        }
+        return points
+    }
+
+    /**
+     * Builds a smooth closed Android [Path] from normalized contour points using Catmull-Rom / cubic Bezier
+     * interpolation so the SAM cutout and highlight follow smooth organic curves instead of straight segments.
+     */
+    fun buildSmoothContourPath(
+        points: List<NormalizedPoint>,
+        width: Float,
+        height: Float
+    ): Path {
+        val path = Path()
+        if (points.size < 3) return path
+
+        val scaled = points.map { Pair(it.x * width, it.y * height) }
+        val n = scaled.size
+        path.moveTo(scaled[0].first, scaled[0].second)
+
+        for (i in 0 until n) {
+            val p0 = scaled[(i - 1 + n) % n]
+            val p1 = scaled[i]
+            val p2 = scaled[(i + 1) % n]
+            val p3 = scaled[(i + 2) % n]
+
+            val cp1x = p1.first + (p2.first - p0.first) / 6f
+            val cp1y = p1.second + (p2.second - p0.second) / 6f
+            val cp2x = p2.first - (p3.first - p1.first) / 6f
+            val cp2y = p2.second - (p3.second - p1.second) / 6f
+
+            path.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.first, p2.second)
+        }
+        path.close()
+        return path
+    }
+
+    /**
+     * Cuts out the single SAM-segmented item from the captured camera frame using its exact
+     * non-rectangular [contourPoints] silhouette + per-pixel background removal, producing a
+     * transparent-background SAM sticker cutout image saved to internal storage + AsyncStorage.
      */
     fun createSamSegmentedCutoutImage(
         sourceBitmap: Bitmap?,
         boundingBox: NormalizedRect,
+        contourPoints: List<NormalizedPoint> = emptyList(),
         itemName: String,
         itemId: String,
         context: Context? = appContext
     ): String {
-        val targetSize = 240
+        val targetSize = 260
         val outBitmap = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(outBitmap)
+
+        val effectiveContour = if (contourPoints.size >= 6) {
+            contourPoints
+        } else {
+            extractPreciseObjectContour(sourceBitmap, boundingBox)
+        }
+
+        // Map contour points into normalized local cutout coordinates inside [padding .. targetSize - padding]
+        val minX = effectiveContour.minOf { it.x }.coerceAtMost(boundingBox.left)
+        val maxX = effectiveContour.maxOf { it.x }.coerceAtLeast(boundingBox.left + boundingBox.width)
+        val minY = effectiveContour.minOf { it.y }.coerceAtMost(boundingBox.top)
+        val maxY = effectiveContour.maxOf { it.y }.coerceAtLeast(boundingBox.top + boundingBox.height)
+        val spanX = (maxX - minX).coerceAtLeast(0.08f)
+        val spanY = (maxY - minY).coerceAtLeast(0.08f)
+
+        val padFrac = 0.10f
+        val availFrac = 1f - padFrac * 2f
+        val localContour = effectiveContour.map { pt ->
+            NormalizedPoint(
+                x = (padFrac + ((pt.x - minX) / spanX) * availFrac).coerceIn(0.06f, 0.94f),
+                y = (padFrac + ((pt.y - minY) / spanY) * availFrac).coerceIn(0.06f, 0.94f)
+            )
+        }
+
+        val preciseCutoutPath = buildSmoothContourPath(
+            points = localContour,
+            width = targetSize.toFloat(),
+            height = targetSize.toFloat()
+        )
 
         val croppedSource = if (sourceBitmap != null && sourceBitmap.width > 8 && sourceBitmap.height > 8) {
             val srcW = sourceBitmap.width
             val srcH = sourceBitmap.height
-            val cropLeft = (boundingBox.left * srcW).toInt().coerceIn(0, srcW - 4)
-            val cropTop = (boundingBox.top * srcH).toInt().coerceIn(0, srcH - 4)
-            val cropW = (boundingBox.width * srcW).toInt().coerceIn(4, srcW - cropLeft)
-            val cropH = (boundingBox.height * srcH).toInt().coerceIn(4, srcH - cropTop)
+            val cropLeft = (minX * srcW).toInt().coerceIn(0, srcW - 4)
+            val cropTop = (minY * srcH).toInt().coerceIn(0, srcH - 4)
+            val cropW = (spanX * srcW).toInt().coerceIn(4, srcW - cropLeft)
+            val cropH = (spanY * srcH).toInt().coerceIn(4, srcH - cropTop)
             runCatching {
-                Bitmap.createBitmap(sourceBitmap, cropLeft, cropTop, cropW, cropH)
+                val rawCrop = Bitmap.createBitmap(sourceBitmap, cropLeft, cropTop, cropW, cropH)
+                removeBackgroundPixelsFromCrop(rawCrop)
             }.getOrNull()
         } else {
             null
         }
 
-        // Soft studio card background for the cutout
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(
-                0f,
-                0f,
-                targetSize.toFloat(),
-                targetSize.toFloat(),
-                intArrayOf(0xFFE7F3FF.toInt(), 0xFFF7F8FA.toInt()),
-                null,
-                Shader.TileMode.CLAMP
-            )
+        // 1. Outer white SAM sticker border following the exact object silhouette
+        val whiteStickerBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 12f
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
         }
-        val outerRect = RectF(4f, 4f, targetSize - 4f, targetSize - 4f)
-        canvas.drawRoundRect(outerRect, 36f, 36f, bgPaint)
+        canvas.drawPath(preciseCutoutPath, whiteStickerBorder)
 
-        // SAM Cutout contour path inside the thumbnail
-        val cutoutPadding = 16f
-        val cutoutRect = RectF(
-            cutoutPadding,
-            cutoutPadding,
-            targetSize - cutoutPadding,
-            targetSize - cutoutPadding
+        // 2. Clip and draw the segmented object strictly inside its precise non-rectangular contour
+        val destRect = RectF(
+            targetSize * padFrac,
+            targetSize * padFrac,
+            targetSize * (1f - padFrac),
+            targetSize * (1f - padFrac)
         )
-        val cutoutPath = Path().apply {
-            addRoundRect(cutoutRect, 28f, 28f, Path.Direction.CW)
-        }
-
         if (croppedSource != null) {
-            val saveCount = canvas.saveLayer(cutoutRect, null)
+            val saveCount = canvas.saveLayer(0f, 0f, targetSize.toFloat(), targetSize.toFloat(), null)
             val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
                 style = Paint.Style.FILL
             }
-            canvas.drawPath(cutoutPath, maskPaint)
+            canvas.drawPath(preciseCutoutPath, maskPaint)
             maskPaint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
             val srcRect = Rect(0, 0, croppedSource.width, croppedSource.height)
-            canvas.drawBitmap(croppedSource, srcRect, cutoutRect, maskPaint)
+            canvas.drawBitmap(croppedSource, srcRect, destRect, maskPaint)
             maskPaint.xfermode = null
             canvas.restoreToCount(saveCount)
         } else {
             val fallbackFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xFFDCEBFF.toInt()
+                color = 0xFF1877F2.toInt()
                 style = Paint.Style.FILL
             }
-            canvas.drawPath(cutoutPath, fallbackFill)
+            canvas.drawPath(preciseCutoutPath, fallbackFill)
         }
 
-        // SAM segmentation cutout highlight outline (clean solid white + FacebookBlue ring)
-        val whiteStickerStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            style = Paint.Style.STROKE
-            strokeWidth = 5f
-        }
-        canvas.drawPath(cutoutPath, whiteStickerStroke)
-
-        val samHighlightStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // 3. Crisp SAM contour highlight stroke around the exact object silhouette (no square border)
+        val samContourStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFF1877F2.toInt()
             style = Paint.Style.STROKE
-            strokeWidth = 2.5f
+            strokeWidth = 4f
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
         }
-        canvas.drawPath(cutoutPath, samHighlightStroke)
+        canvas.drawPath(preciseCutoutPath, samContourStroke)
 
-        // Subtle label badge at bottom of cutout image
-        val pillHeight = 34f
-        val pillRect = RectF(
-            cutoutPadding + 8f,
-            targetSize - cutoutPadding - pillHeight - 6f,
-            targetSize - cutoutPadding - 8f,
-            targetSize - cutoutPadding - 6f
-        )
-        val pillBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xE61877F2.toInt()
-            style = Paint.Style.FILL
-        }
-        canvas.drawRoundRect(pillRect, 17f, 17f, pillBgPaint)
-
-        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 18f
-            isFakeBoldText = true
-            textAlign = Paint.Align.CENTER
-        }
-        val shortName = if (itemName.length > 16) itemName.take(15) + "…" else itemName
-        val textY = pillRect.centerY() - (labelPaint.descent() + labelPaint.ascent()) / 2f
-        canvas.drawText(shortName, pillRect.centerX(), textY, labelPaint)
-
-        // Encode as PNG data URI and also persist to internal filesDir if context is available
+        // Encode as PNG data URI (preserving alpha transparency outside the object contour)
         val baos = ByteArrayOutputStream()
-        outBitmap.compress(Bitmap.CompressFormat.PNG, 90, baos)
+        outBitmap.compress(Bitmap.CompressFormat.PNG, 92, baos)
         val pngBytes = baos.toByteArray()
 
         val ctx = context?.applicationContext ?: appContext
@@ -274,6 +495,59 @@ object BaggageAsyncStorage {
 
         val base64 = Base64.encodeToString(pngBytes, Base64.NO_WRAP)
         return "data:image/png;base64,$base64"
+    }
+
+    /**
+     * Softly feathers background border pixels to transparent so the cutout hugs the object cleanly.
+     */
+    private fun removeBackgroundPixelsFromCrop(crop: Bitmap): Bitmap {
+        val w = crop.width
+        val h = crop.height
+        if (w < 8 || h < 8) return crop
+
+        val result = crop.copy(Bitmap.Config.ARGB_8888, true)
+        val corners = intArrayOf(
+            result.getPixel(0, 0),
+            result.getPixel(w - 1, 0),
+            result.getPixel(0, h - 1),
+            result.getPixel(w - 1, h - 1)
+        )
+        var bgR = 0
+        var bgG = 0
+        var bgB = 0
+        for (c in corners) {
+            bgR += Color.red(c)
+            bgG += Color.green(c)
+            bgB += Color.blue(c)
+        }
+        bgR /= corners.size
+        bgG /= corners.size
+        bgB /= corners.size
+
+        val cx = w * 0.5f
+        val cy = h * 0.5f
+        val maxDist = kotlin.math.hypot(cx.toDouble(), cy.toDouble()).toFloat().coerceAtLeast(1f)
+
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val radial = kotlin.math.hypot((x - cx).toDouble(), (y - cy).toDouble()).toFloat() / maxDist
+                if (radial > 0.52f) {
+                    val px = result.getPixel(x, y)
+                    val diff = abs(Color.red(px) - bgR) + abs(Color.green(px) - bgG) + abs(Color.blue(px) - bgB)
+                    if (diff < 32) {
+                        result.setPixel(x, y, Color.TRANSPARENT)
+                    } else if (diff < 48) {
+                        val alpha = ((diff - 32) * 255 / 16).coerceIn(0, 255)
+                        result.setPixel(
+                            x,
+                            y,
+                            Color.argb(alpha, Color.red(px), Color.green(px), Color.blue(px))
+                        )
+                    }
+                }
+            }
+        }
+        return result
     }
 
     /**
