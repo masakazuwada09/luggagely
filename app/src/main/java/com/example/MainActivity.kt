@@ -27,6 +27,7 @@ import com.example.auth.authStateFlow
 import com.example.auth.configureAppCheck
 import com.example.auth.googleProfilePhotoUrlFlow
 import com.example.auth.signOutUser
+import com.example.data.BaggageAsyncStorage
 import com.example.data.BaggageRepository
 import com.example.model.BaggageGuardViewModel
 import com.example.ui.BaggageGuardStudio
@@ -40,6 +41,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize AsyncStorage for SAM segmented item cutouts and local item manifest
+        BaggageAsyncStorage.init(this)
 
         // STEP 1: Configure App Check with launch intent before any UI or Firebase operations
         configureAppCheck(this, intent)

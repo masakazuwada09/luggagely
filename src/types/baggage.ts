@@ -17,6 +17,7 @@ export interface BaggageItem {
   source: ItemSource;
   confidence?: number;
   boundingBox?: BoundingBoxNorm;
+  imageUri?: string;
   shiftableToPersonalItem: boolean;
 }
 

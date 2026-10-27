@@ -104,6 +104,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.SubcomposeAsyncImage
 import com.example.R
+import com.example.data.BaggageAsyncStorage
 import com.example.model.AirlinePreset
 import com.example.model.BaggageGuardUiState
 import com.example.model.BaggageGuardViewModel
@@ -115,6 +116,7 @@ import com.example.model.ManifestFilter
 import com.example.ui.components.ConnectedAirlineDashboardBanner
 import com.example.ui.components.FullScreenCameraSegmentationScreen
 import com.example.ui.components.SegmentationViewportCard
+import com.example.ui.components.SegmentedItemThumbnail
 import com.example.ui.components.StickyBottomNavBar
 import com.example.ui.components.StudioTab
 import com.example.ui.screens.LuggageBreakdownTabScreen
@@ -161,6 +163,11 @@ fun BaggageGuardStudio(
         { showSignOutConfirmDialog = true }
     } else {
         null
+    }
+
+    LaunchedEffect(Unit) {
+        BaggageAsyncStorage.init(context)
+        viewModel.loadFromAsyncStorageIfNeeded()
     }
 
     LaunchedEffect(userLabel, userEmail) {
@@ -300,18 +307,20 @@ fun BaggageGuardStudio(
         containerColor = DashboardFeedGrayBg,
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
-            StickyBottomNavBar(
-                currentTab = currentTab,
-                isScanning = uiState.isScanning,
-                isOverweight = uiState.isOverweight,
-                onSelectTab = { selected ->
-                    if (selected == StudioTab.CAMERA) {
-                        navigateToCameraWithPermission()
-                    } else {
-                        currentTab = selected
+            if (currentTab != StudioTab.CAMERA) {
+                StickyBottomNavBar(
+                    currentTab = currentTab,
+                    isScanning = uiState.isScanning,
+                    isOverweight = uiState.isOverweight,
+                    onSelectTab = { selected ->
+                        if (selected == StudioTab.CAMERA) {
+                            navigateToCameraWithPermission()
+                        } else {
+                            currentTab = selected
+                        }
                     }
-                }
-            )
+                )
+            }
         }
     ) { innerPadding ->
         BoxWithConstraints(
@@ -1117,116 +1126,57 @@ private fun DynamicManifestCard(
                 }
             }
 
-            // Dashboard Luggage Lists (Luggage Bags / Loadout Rigs — Click to view Bag Details in Bottom Sheet)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Dashboard Luggage Summary Row (Click to view Luggage Details in Bottom Sheet)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onSelectRig(uiState.selectedRig) }
+                    .testTag("dashboard_luggage_bag_${uiState.selectedRig.id}"),
+                color = FacebookBlueSoftBg,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, FacebookBlue)
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "LUGGAGE LISTS (TAP BAG OR ITEM FOR DETAILS)",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = TextSecondary
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Luggage,
+                            contentDescription = null,
+                            tint = FacebookBlue,
+                            modifier = Modifier.size(18.dp)
                         )
-                    )
+                        Column {
+                            Text(
+                                text = "Connected Luggage (${uiState.connectedBooking.carrier.carrierName})",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                            )
+                            Text(
+                                text = "${uiState.activeItems.size} items • ${BaggageGuardUiState.formatWeight(uiState.totalWeightKg)} / ${BaggageGuardUiState.formatWeight(uiState.limitKg)} kg",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
                     Text(
-                        text = "${GearRigPreset.entries.size} Bags • ${uiState.activeItems.size} Items",
+                        text = "Luggage Details →",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
                             color = FacebookBlue
                         )
                     )
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    GearRigPreset.entries.forEach { rig ->
-                        val isRigSelected = uiState.selectedRig == rig
-                        val rigItems = BaggageGuardViewModel.buildRigItems(rig)
-                        val rigTotalKg = if (isRigSelected) uiState.totalWeightKg else rigItems.sumOf { it.weightKg }
-
-                        Surface(
-                            modifier = Modifier
-                                .width(205.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onSelectRig(rig) }
-                                .testTag("dashboard_luggage_bag_${rig.id}"),
-                            color = if (isRigSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(
-                                width = if (isRigSelected) 1.5.dp else 1.dp,
-                                color = if (isRigSelected) FacebookBlue else DashboardBorderLight
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Luggage,
-                                            contentDescription = null,
-                                            tint = if (isRigSelected) FacebookBlue else TextSecondary,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Text(
-                                            text = rig.title,
-                                            style = MaterialTheme.typography.labelLarge.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp
-                                            ),
-                                            color = TextPrimary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = rig.subtitle,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                    color = TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "${BaggageGuardUiState.formatWeight(rigTotalKg)} / ${BaggageGuardUiState.formatWeight(rig.defaultLimit.limitKg)} kg",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontFamily = JetBrainsMonoFontFamily,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isRigSelected) FacebookBlue else TextPrimary
-                                        )
-                                    )
-                                    Text(
-                                        text = "Details →",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = FacebookBlue
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -1337,181 +1287,45 @@ private fun ManifestItemRow(
         shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, borderColor)
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(indicatorColor)
-                    )
+                SegmentedItemThumbnail(
+                    imageUri = item.imageUri,
+                    itemName = item.name,
+                    sizeDp = 44.dp
+                )
 
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.name,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = TextPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (isAi) {
-                                    "${item.maskId ?: "META-SAM"} • MUSE-SPARK-1.3 • ${((item.confidence ?: 0.98f) * 100).toInt()}% CONF"
-                                } else {
-                                    "MANUAL OVERRIDE"
-                                },
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                color = indicatorColor
-                            )
-                            Text(
-                                text = "• ${item.category.tagCode}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                color = TextMuted
-                            )
-                            if (isRecommendedForShift) {
-                                Text(
-                                    text = "• SHIFT TARGET",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold
-                                    ),
-                                    color = CrimsonAlert
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Surface(
-                        color = DashboardCardWhite,
-                        shape = RoundedCornerShape(50),
-                        border = BorderStroke(1.dp, DashboardBorderLight)
-                    ) {
-                        Text(
-                            text = "${BaggageGuardUiState.formatWeight(item.weightKg)} kg",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = TextPrimary,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onShiftToPersonal,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .testTag("shift_item_${item.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoveDown,
-                            contentDescription = stringResource(R.string.shift_to_personal_cd),
-                            tint = if (isRecommendedForShift) CrimsonAlert else TextSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onDelete,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .testTag("delete_item_${item.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = stringResource(R.string.delete_item_cd),
-                            tint = TextSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
-            AnimatedVisibility(
-                visible = isSelected,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
+            Surface(
+                color = DashboardCardWhite,
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, DashboardBorderLight)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(DashboardCardWhite)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "CALIBRATE MASS:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
-                    )
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(
-                            onClick = { onAdjustWeight(-0.10) },
-                            modifier = Modifier.height(34.dp),
-                            shape = RoundedCornerShape(50),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            border = BorderStroke(1.dp, DashboardBorderLight)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Remove,
-                                contentDescription = "Decrease weight by 0.1kg",
-                                tint = TextPrimary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "0.1kg",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextPrimary
-                            )
-                        }
-
-                        OutlinedButton(
-                            onClick = { onAdjustWeight(0.10) },
-                            modifier = Modifier.height(34.dp),
-                            shape = RoundedCornerShape(50),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            border = BorderStroke(1.dp, DashboardBorderLight)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Increase weight by 0.1kg",
-                                tint = TextPrimary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "0.1kg",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextPrimary
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = "${BaggageGuardUiState.formatWeight(item.weightKg)} kg",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextPrimary,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                )
             }
         }
     }
@@ -1561,38 +1375,6 @@ private fun ManualOverrideFormCard(
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                         color = TextSecondary
                     )
-                }
-            }
-
-            // Quick Tap Nomad Override Presets
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val quickPresets = listOf(
-                    Triple("Packed Hiking Boots", 1.45, GearCategory.APPAREL),
-                    Triple("TSA Liquids Bag", 0.75, GearCategory.LIQUIDS),
-                    Triple("Down Winter Parka", 1.20, GearCategory.APPAREL),
-                    Triple("Universal Cable Brick", 0.55, GearCategory.POWER)
-                )
-                quickPresets.forEachIndexed { idx, (label, kg, cat) ->
-                    Surface(
-                        modifier = Modifier
-                            .testTag("quick_manual_preset_$idx")
-                            .clickable { onQuickPreset(label, kg, cat) },
-                        color = DashboardSurfaceLight,
-                        shape = RoundedCornerShape(50),
-                        border = BorderStroke(1.dp, DashboardBorderLight)
-                    ) {
-                        Text(
-                            text = "+ $label (${BaggageGuardUiState.formatWeight(kg)}kg)",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                            color = TextPrimary,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                    }
                 }
             }
 
@@ -1793,20 +1575,11 @@ private fun LuggageItemDetailsSheetContent(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (isAi) FacebookBlueSoftBg else AmberManualGlow),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Luggage,
-                        contentDescription = null,
-                        tint = if (isAi) FacebookBlue else AmberManual,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                SegmentedItemThumbnail(
+                    imageUri = item.imageUri,
+                    itemName = item.name,
+                    sizeDp = 52.dp
+                )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "LUGGAGE ITEM DETAILS",
@@ -2288,20 +2061,25 @@ private fun LuggageBagDetailsSheetContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            SegmentedItemThumbnail(
+                                imageUri = bagItem.imageUri,
+                                itemName = bagItem.name,
+                                sizeDp = 40.dp
+                            )
                             Text(
                                 text = bagItem.name,
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = TextPrimary
-                            )
-                            Text(
-                                text = "${bagItem.category.label} • ${if (bagItem.source == ItemSource.AI_SCANNED) "AI Scanned" else "Manual"}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary
+                                color = TextPrimary,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                         Text(
-                            text = "${BaggageGuardUiState.formatWeight(bagItem.weightKg)} kg →",
+                            text = "${BaggageGuardUiState.formatWeight(bagItem.weightKg)} kg",
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontFamily = JetBrainsMonoFontFamily,
                                 fontWeight = FontWeight.Bold,

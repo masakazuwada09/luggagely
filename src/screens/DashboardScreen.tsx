@@ -376,8 +376,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             <View style={styles.emptyBox}>
               <Text style={styles.emptyTitle}>No luggage items logged yet (0.0 kg)</Text>
               <Text style={styles.emptySub}>
-                Tap the center camera button to scan items with {MUSE_SPARK_MODEL} or add an item
-                below.
+                Tap the center camera button to segment an item with SAM or add an item below.
               </Text>
             </View>
           ) : (
@@ -387,28 +386,19 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                 style={styles.itemRow}
                 onPress={() => setSelectedLuggageItem(item)}
               >
-                <View
-                  style={[
-                    styles.sourceDot,
-                    {
-                      backgroundColor:
-                        item.source === 'AI_SCANNED' ? FB_THEME.facebookBlue : '#F59E0B',
-                    },
-                  ]}
-                />
+                {item.imageUri ? (
+                  <Image source={{ uri: item.imageUri }} style={styles.itemCutoutThumb} />
+                ) : (
+                  <View style={styles.itemCutoutFallback}>
+                    <Text style={styles.itemCutoutInitial}>
+                      {item.name.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
                 <View style={styles.itemInfo}>
                   <Text style={styles.itemName}>{item.name}</Text>
-                  <Text style={styles.itemMeta}>
-                    {item.category} • {item.source === 'AI_SCANNED' ? 'AI Scanned' : 'Manual'} • Tap for details
-                  </Text>
                 </View>
                 <Text style={styles.itemWeight}>{item.weightKg.toFixed(2)} kg</Text>
-                <TouchableOpacity
-                  style={styles.deleteBtn}
-                  onPress={() => onRemoveItem(item.id)}
-                >
-                  <Text style={styles.deleteBtnText}>✕</Text>
-                </TouchableOpacity>
               </TouchableOpacity>
             ))
           )}
@@ -479,12 +469,28 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               }}
             >
               <View style={styles.rowBetween}>
-                <View style={{ flex: 1, marginRight: 10 }}>
-                  <Text style={styles.pnrLabel}>LUGGAGE ITEM DETAILS</Text>
-                  <Text style={[styles.headerTitle, { marginTop: 2 }]}>
-                    {selectedLuggageItem.name}
-                  </Text>
-                  <Text style={styles.itemMeta}>{selectedLuggageItem.category}</Text>
+                <View style={styles.rowCenter}>
+                  {selectedLuggageItem.imageUri ? (
+                    <Image
+                      source={{ uri: selectedLuggageItem.imageUri }}
+                      style={[styles.itemCutoutThumb, { width: 52, height: 52, marginRight: 12 }]}
+                    />
+                  ) : (
+                    <View
+                      style={[styles.itemCutoutFallback, { width: 52, height: 52, marginRight: 12 }]}
+                    >
+                      <Text style={styles.itemCutoutInitial}>
+                        {selectedLuggageItem.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={styles.pnrLabel}>LUGGAGE ITEM DETAILS</Text>
+                    <Text style={[styles.headerTitle, { marginTop: 2 }]}>
+                      {selectedLuggageItem.name}
+                    </Text>
+                    <Text style={styles.itemMeta}>{selectedLuggageItem.category}</Text>
+                  </View>
                 </View>
                 <View style={styles.pnrBadge}>
                   <Text style={styles.pnrValue}>
@@ -854,6 +860,31 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     marginRight: 10,
+  },
+  itemCutoutThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: FB_THEME.facebookBlue,
+    backgroundColor: FB_THEME.facebookBlueSoft,
+    marginRight: 12,
+  },
+  itemCutoutFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: FB_THEME.borderLight,
+    backgroundColor: FB_THEME.facebookBlueSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  itemCutoutInitial: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: FB_THEME.facebookBlue,
   },
   itemInfo: {
     flex: 1,

@@ -42,21 +42,21 @@ object MuseSparkMetaClient {
 
         val base64Jpeg = encodeBitmapToBase64Jpeg(bitmap)
         val developerPrompt = """
-            You are the Meta SAM + Muse Spark ($MUSE_SPARK_MODEL_ID) real-time vision segmentation and gravimetric mass inference engine.
-            Analyze the camera image, segment all visible objects/gear/luggage/items, and return ONLY valid JSON with this exact structure (no markdown fences):
+            You are a Meta SAM single-object segmentation and weight estimation engine ($MUSE_SPARK_MODEL_ID).
+            Analyze the camera image, segment ONLY THE SINGLE MOST PROMINENT ITEM in the foreground, and return ONLY valid JSON with this exact structure (no markdown fences):
             {
               "model": "$MUSE_SPARK_MODEL_ID",
-              "summary": "1-sentence summary of the segmented items identified by $MUSE_SPARK_MODEL_ID & Meta SAM",
+              "summary": "1-sentence description of the single segmented item",
               "items": [
                 {
                   "name": "Specific identified item name",
-                  "weightKg": 1.25,
+                  "weightKg": 0.85,
                   "category": "COMPUTE | POWER | APPAREL | LIQUIDS | ACCESSORY",
                   "confidence": 0.98,
-                  "left": 0.12,
-                  "top": 0.18,
-                  "width": 0.34,
-                  "height": 0.32
+                  "left": 0.22,
+                  "top": 0.20,
+                  "width": 0.56,
+                  "height": 0.54
                 }
               ]
             }
@@ -119,7 +119,7 @@ object MuseSparkMetaClient {
                             put("type", "text")
                             put(
                                 "text",
-                                "Using model $MUSE_SPARK_MODEL_ID and Meta SAM segmentation, detect, segment, and identify all visible objects in this camera frame. Return JSON with summary and items (name, weightKg, category, confidence, left, top, width, height)."
+                                "Using Meta SAM segmentation, detect, segment, and label ONLY ONE primary item in the center/foreground of this camera frame. Return JSON with summary and a 1-element items array (name, weightKg, category, confidence, left, top, width, height)."
                             )
                         }
                     )

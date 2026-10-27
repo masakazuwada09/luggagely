@@ -148,12 +148,12 @@ fun QuickCameraScannerBanner(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Muse Spark 1.3 + Meta SAM Scanner",
+                        text = "SAM Item Cutout Scanner",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = TextPrimary
                     )
                     Text(
-                        text = "${uiState.activeItems.count { it.source == ItemSource.AI_SCANNED }} objects segmented • ${BaggageGuardUiState.formatWeight(uiState.aiScannedWeightKg)} kg",
+                        text = "${uiState.activeItems.count { it.source == ItemSource.AI_SCANNED }} items segmented • ${BaggageGuardUiState.formatWeight(uiState.aiScannedWeightKg)} kg",
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                         color = TextSecondary
                     )
@@ -216,94 +216,10 @@ fun LuggageBreakdownTabScreen(
                     color = TextPrimary
                 )
                 Text(
-                    text = "Volumetric category distribution, active rig presets, and personal item buffer.",
+                    text = "Volumetric category distribution and personal item buffer.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
-            }
-        }
-
-        // Active Loadout Rig Selector Card
-        item(key = "rig_presets_card") {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 640.dp)
-                    .border(1.dp, DashboardBorderLight, RoundedCornerShape(16.dp)),
-                color = DashboardCardWhite,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Luggage,
-                            contentDescription = null,
-                            tint = FacebookBlue,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "ACTIVE BAGGAGE LOADOUT RIG",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = TextPrimary
-                        )
-                    }
-
-                    GearRigPreset.entries.forEach { rig ->
-                        val isSelected = uiState.selectedRig == rig
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("luggage_rig_${rig.id}")
-                                .clickable { onSelectRig(rig) },
-                            color = if (isSelected) FacebookBlueSoftBg else DashboardSurfaceLight,
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) FacebookBlue else DashboardBorderLight
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = rig.title,
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = TextPrimary
-                                    )
-                                    Text(
-                                        text = "${rig.subtitle} • Default ${rig.defaultLimit.shortLabel}",
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
-                                        color = TextSecondary
-                                    )
-                                }
-
-                                Surface(
-                                    color = if (isSelected) FacebookBlue else DashboardCardWhite,
-                                    shape = RoundedCornerShape(50),
-                                    border = BorderStroke(1.dp, if (isSelected) FacebookBlue else DashboardBorderLight)
-                                ) {
-                                    Text(
-                                        text = if (isSelected) "ACTIVE" else "LOAD",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isSelected) Color.White else TextSecondary,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
 

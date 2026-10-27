@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.BaggageAsyncStorage
 import com.example.data.BaggageItemEntity
 import com.example.data.BaggageRepository
 import com.example.data.MuseSparkMetaClient
@@ -58,7 +59,8 @@ data class BaggageItem(
     val confidence: Float? = null,
     val boundingBox: NormalizedRect? = null,
     val isShiftedToPersonal: Boolean = false,
-    val maskId: String? = null
+    val maskId: String? = null,
+    val imageUri: String? = null
 )
 
 enum class AirlinePreset(
@@ -359,8 +361,9 @@ data class BaggageGuardUiState(
     val selectedRig: GearRigPreset = GearRigPreset.NOMAD_CABIN,
     val isScanning: Boolean = false,
     val scanProgress: Float = 0f,
-    val scanPhaseLabel: String = "MUSE-SPARK-1.3 // META SAM READY",
+    val scanPhaseLabel: String = "SAM Segment Ready",
     val selectedItemId: String? = null,
+    val lastSegmentedItem: BaggageItem? = null,
     val showBoundingBoxes: Boolean = true,
     val showHeatmapOverlay: Boolean = false,
     val activeFilter: ManifestFilter = ManifestFilter.ALL,
@@ -498,7 +501,7 @@ class BaggageGuardViewModel(
 
     private val _uiState = MutableStateFlow(
         BaggageGuardUiState(
-            items = buildRigItems(GearRigPreset.NOMAD_CABIN),
+            items = BaggageAsyncStorage.loadItems(),
             selectedPreset = AirlinePreset.CABIN_7KG,
             selectedRig = GearRigPreset.NOMAD_CABIN
         )
@@ -510,25 +513,25 @@ class BaggageGuardViewModel(
     private val visionSchema by lazy {
         val detectedItemSchema = Schema.obj(
             properties = mapOf(
-                "name" to Schema.string(description = "Specific identified name of the object or item"),
+                "name" to Schema.string(description = "Specific identified name of the single primary object in the camera frame"),
                 "weightKg" to Schema.double(description = "Realistic estimated weight in kilograms (between 0.10 and 20.0)"),
                 "category" to Schema.enumeration(
                     values = listOf("COMPUTE", "POWER", "APPAREL", "LIQUIDS", "ACCESSORY"),
                     description = "Gear category classification"
                 ),
-                "confidence" to Schema.double(description = "Detection confidence score between 0.86 and 0.99"),
-                "left" to Schema.double(description = "Normalized bounding box left coordinate (0.04 to 0.65)"),
-                "top" to Schema.double(description = "Normalized bounding box top coordinate (0.08 to 0.65)"),
-                "width" to Schema.double(description = "Normalized bounding box width (0.18 to 0.44)"),
-                "height" to Schema.double(description = "Normalized bounding box height (0.18 to 0.44)")
+                "confidence" to Schema.double(description = "Detection confidence score between 0.88 and 0.99"),
+                "left" to Schema.double(description = "Normalized bounding box left coordinate (0.10 to 0.55)"),
+                "top" to Schema.double(description = "Normalized bounding box top coordinate (0.12 to 0.55)"),
+                "width" to Schema.double(description = "Normalized bounding box width (0.28 to 0.65)"),
+                "height" to Schema.double(description = "Normalized bounding box height (0.28 to 0.65)")
             )
         )
         Schema.obj(
             properties = mapOf(
-                "summary" to Schema.string(description = "Concise 1-sentence summary of the objects detected and identified in the camera frame"),
+                "summary" to Schema.string(description = "Concise 1-sentence summary of the single segmented item"),
                 "items" to Schema.array(
                     items = detectedItemSchema,
-                    description = "List of detected and segmented items in the frame with bounding boxes and estimated weight in kg"
+                    description = "Single-element list containing ONLY the 1 primary segmented item in the frame"
                 )
             )
         )
@@ -550,6 +553,18 @@ class BaggageGuardViewModel(
         }
     }
 
+    fun loadFromAsyncStorageIfNeeded() {
+        val cached = BaggageAsyncStorage.loadItems()
+        if (_uiState.value.items.isEmpty() && cached.isNotEmpty()) {
+            _uiState.update { state ->
+                state.copy(
+                    items = cached,
+                    lastSegmentedItem = cached.firstOrNull { !it.imageUri.isNullOrBlank() }
+                )
+            }
+        }
+    }
+
     private fun observeCloudManifest(repo: BaggageRepository, uid: String) {
         viewModelScope.launch {
             repo.observeItems(uid)
@@ -558,22 +573,36 @@ class BaggageGuardViewModel(
                     _uiState.update { it.copy(cloudSyncError = error.localizedMessage) }
                 }
                 .collect { cloudEntities ->
-                    val defaultBoxes = buildRigItems(_uiState.value.selectedRig)
+                    val localSaved = BaggageAsyncStorage.loadItems()
                     val mapped = if (cloudEntities.isNotEmpty()) {
                         cloudEntities.mapIndexed { idx, entity ->
-                            val fallbackBox = defaultBoxes.getOrNull(idx % defaultBoxes.size)?.boundingBox
-                            entity.toDomainModel(fallbackBox, idx)
+                            val matchingLocal = localSaved.firstOrNull {
+                                it.id == entity.id || it.name.equals(entity.name, ignoreCase = true)
+                            }
+                            entity.toDomainModel(
+                                fallbackBox = matchingLocal?.boundingBox,
+                                fallbackImageUri = matchingLocal?.imageUri,
+                                index = idx
+                            )
                         }
                     } else {
-                        _uiState.value.items.ifEmpty { defaultBoxes }
+                        localSaved
                     }
-                    _uiState.update { it.copy(items = mapped, cloudSyncError = null) }
+                    BaggageAsyncStorage.saveItems(mapped)
+                    _uiState.update {
+                        it.copy(
+                            items = mapped,
+                            lastSegmentedItem = mapped.firstOrNull { item -> !item.imageUri.isNullOrBlank() },
+                            cloudSyncError = null
+                        )
+                    }
                 }
         }
     }
 
     private fun BaggageItemEntity.toDomainModel(
         fallbackBox: NormalizedRect?,
+        fallbackImageUri: String?,
         index: Int
     ): BaggageItem {
         val src = runCatching { ItemSource.valueOf(source) }.getOrDefault(ItemSource.MANUAL_ENTRY)
@@ -587,7 +616,8 @@ class BaggageGuardViewModel(
             confidence = if (src == ItemSource.AI_SCANNED) 0.985f else null,
             boundingBox = if (src == ItemSource.AI_SCANNED) fallbackBox else null,
             isShiftedToPersonal = isShiftedToPersonal,
-            maskId = if (src == ItemSource.AI_SCANNED) "SEG-0${index + 1}" else null
+            maskId = if (src == ItemSource.AI_SCANNED) "SAM-0${index + 1}" else null,
+            imageUri = fallbackImageUri
         )
     }
 
@@ -601,68 +631,16 @@ class BaggageGuardViewModel(
             state.copy(
                 selectedRig = rig,
                 selectedPreset = rig.defaultLimit,
-                items = buildRigItems(rig),
                 isScanning = false,
                 scanProgress = 0f,
-                scanPhaseLabel = "MUSE-SPARK-1.3 // RIG LOCKED",
+                scanPhaseLabel = "SAM Segment Ready",
                 selectedItemId = null
             )
         }
     }
 
     fun triggerMultiAgentScan() {
-        if (_uiState.value.isScanning) return
-        scanJob?.cancel()
-
-        val currentRig = _uiState.value.selectedRig
-        val manualItemsToKeep = _uiState.value.items.filter { it.source == ItemSource.MANUAL_ENTRY }
-        val freshAiItems = buildRigItems(currentRig).filter { it.source == ItemSource.AI_SCANNED }
-
-        scanJob = viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    isScanning = true,
-                    scanProgress = 0.05f,
-                    scanPhaseLabel = "MUSE-SPARK-1.3 // META SAM SEGMENTATION",
-                    items = manualItemsToKeep,
-                    selectedItemId = null
-                )
-            }
-
-            val totalSteps = 20
-            for (step in 1..totalSteps) {
-                delay(50L)
-                val progress = step.toFloat() / totalSteps.toFloat()
-                val phase = when {
-                    progress < 0.35f -> "MUSE-SPARK-1.3 // META SAM MASK EXTRACTION"
-                    progress < 0.72f -> "MUSE-SPARK-1.3 // VOLUMETRIC DENSITY TENSOR"
-                    else -> "MUSE-SPARK-1.3 // GRAVIMETRIC MASS INFERENCE"
-                }
-
-                val revealedCount = ((progress * freshAiItems.size).toInt()).coerceIn(0, freshAiItems.size)
-                val revealedAi = freshAiItems.take(revealedCount)
-
-                _uiState.update { state ->
-                    state.copy(
-                        scanProgress = progress,
-                        scanPhaseLabel = phase,
-                        items = revealedAi + manualItemsToKeep,
-                        selectedItemId = revealedAi.lastOrNull()?.id
-                    )
-                }
-            }
-
-            _uiState.update { state ->
-                state.copy(
-                    isScanning = false,
-                    scanProgress = 1f,
-                    scanPhaseLabel = "MUSE-SPARK-1.3 // ${freshAiItems.size} OBJECTS LOCKED",
-                    items = freshAiItems + manualItemsToKeep,
-                    selectedItemId = null,
-                    scanGenerationCount = state.scanGenerationCount + 1
-                )
-            }
-        }
+        scanCameraFrameWithAi(null)
     }
 
     fun dismissAiError() {
@@ -670,32 +648,27 @@ class BaggageGuardViewModel(
     }
 
     fun scanCameraFrameWithAi(frameBitmap: Bitmap?) {
-        if (frameBitmap == null) {
-            triggerMultiAgentScan()
-            return
-        }
         if (_uiState.value.isScanning) return
         scanJob?.cancel()
-
-        val manualItemsToKeep = _uiState.value.items.filter { it.source == ItemSource.MANUAL_ENTRY }
 
         scanJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isScanning = true,
-                    scanProgress = 0.25f,
-                    scanPhaseLabel = "MUSE-SPARK-1.3 // META SAM SEGMENTATION",
+                    scanProgress = 0.35f,
+                    scanPhaseLabel = "SAM Segmenting Item…",
                     aiError = null
                 )
             }
 
             try {
-                val scaledBitmap = scaleBitmapForInference(frameBitmap, maxDimension = 1024)
+                val effectiveBitmap = frameBitmap ?: createFallbackCameraCaptureBitmap()
+                val scaledBitmap = scaleBitmapForInference(effectiveBitmap, maxDimension = 1024)
 
                 _uiState.update {
                     it.copy(
-                        scanProgress = 0.58f,
-                        scanPhaseLabel = "MUSE-SPARK-1.3 // IDENTIFYING OBJECTS"
+                        scanProgress = 0.68f,
+                        scanPhaseLabel = "Highlighting & Cutting Out Item…"
                     )
                 }
 
@@ -704,7 +677,7 @@ class BaggageGuardViewModel(
                         runCatching {
                             MuseSparkMetaClient.analyzeFrameWithMuseSpark(scaledBitmap)
                         }.onFailure { err ->
-                            Log.w(TAG, "Muse Spark Meta API fallback triggered: ${err.message}")
+                            Log.w(TAG, "SAM API fallback triggered: ${err.message}")
                         }.getOrNull()
                     } else {
                         null
@@ -717,12 +690,11 @@ class BaggageGuardViewModel(
                             content {
                                 image(scaledBitmap)
                                 text(
-                                    "Act as the Meta muse-spark-1.3 + Meta SAM vision segmentation engine. " +
-                                        "Analyze this camera frame for baggage and object segmentation. " +
-                                        "Detect and identify all visible items, electronics, luggage, apparel, containers, or room objects in the camera view. " +
-                                        "For each detected item, return its specific identified name, realistic estimated weight in kilograms (between 0.10 and 15.0 kg), " +
-                                        "category (COMPUTE, POWER, APPAREL, LIQUIDS, or ACCESSORY), confidence (0.88 to 0.99), " +
-                                        "and normalized bounding box coordinates (left, top, width, height in 0.04..0.92) matching where the object appears in the image."
+                                    "Act as a Meta SAM single-object segmentation engine. " +
+                                        "Detect, segment, and label ONLY THE SINGLE MOST PROMINENT ITEM in this camera frame. " +
+                                        "Return ONLY 1 item in the items array with its specific identified name, realistic estimated weight in kilograms (0.10 to 15.0 kg), " +
+                                        "category (COMPUTE, POWER, APPAREL, LIQUIDS, or ACCESSORY), confidence (0.90 to 0.99), " +
+                                        "and normalized bounding box coordinates (left, top, width, height in 0.12..0.78) where the object is located."
                                 )
                             }
                         )
@@ -731,93 +703,129 @@ class BaggageGuardViewModel(
                 }
 
                 val root = JSONObject(jsonString)
-                val summary = root.optString("summary", "Camera frame analyzed and segmented.")
+                val summary = root.optString("summary", "Segmented item cut out and saved.")
                 val itemsArray = root.optJSONArray("items")
 
-                val detectedItems = mutableListOf<BaggageItem>()
-                if (itemsArray != null) {
-                    for (i in 0 until itemsArray.length()) {
-                        val obj = itemsArray.optJSONObject(i) ?: continue
-                        val name = obj.optString("name", "Detected Object ${i + 1}").trim()
-                        val rawWeight = obj.optDouble("weightKg", 0.85)
-                        val weightKg = ((rawWeight.coerceIn(0.05, 30.0) * 100.0).roundToInt()) / 100.0
-                        val catStr = obj.optString("category", "ACCESSORY")
-                        val category = runCatching { GearCategory.valueOf(catStr) }.getOrDefault(GearCategory.ACCESSORY)
-                        val conf = obj.optDouble("confidence", 0.95).toFloat().coerceIn(0.80f, 0.99f)
+                // Extract ONLY ONE primary segmented item
+                val firstObj = if (itemsArray != null && itemsArray.length() > 0) {
+                    itemsArray.optJSONObject(0)
+                } else {
+                    null
+                } ?: throw IllegalStateException("No item could be segmented in the current camera view.")
 
-                        val left = obj.optDouble("left", 0.10 + (i % 2) * 0.42).toFloat().coerceIn(0.03f, 0.72f)
-                        val top = obj.optDouble("top", 0.12 + (i / 2) * 0.36).toFloat().coerceIn(0.05f, 0.72f)
-                        val width = obj.optDouble("width", 0.32).toFloat().coerceIn(0.16f, (0.95f - left).coerceAtLeast(0.18f))
-                        val height = obj.optDouble("height", 0.30).toFloat().coerceIn(0.16f, (0.92f - top).coerceAtLeast(0.18f))
+                val name = firstObj.optString("name", "Segmented Item").trim().ifBlank { "Segmented Item" }
+                val rawWeight = firstObj.optDouble("weightKg", 0.85)
+                val weightKg = ((rawWeight.coerceIn(0.05, 30.0) * 100.0).roundToInt()) / 100.0
+                val catStr = firstObj.optString("category", "ACCESSORY")
+                val category = runCatching { GearCategory.valueOf(catStr) }.getOrDefault(GearCategory.ACCESSORY)
+                val conf = firstObj.optDouble("confidence", 0.97).toFloat().coerceIn(0.85f, 0.99f)
 
-                        detectedItems.add(
-                            BaggageItem(
-                                id = "cam_ai_${UUID.randomUUID().toString().take(8)}",
-                                name = name,
-                                weightKg = weightKg,
-                                source = ItemSource.AI_SCANNED,
-                                category = category,
-                                confidence = conf,
-                                boundingBox = NormalizedRect(left, top, width, height),
-                                maskId = "SEG-0${i + 1}"
-                            )
-                        )
-                    }
-                }
+                val left = firstObj.optDouble("left", 0.22).toFloat().coerceIn(0.08f, 0.65f)
+                val top = firstObj.optDouble("top", 0.20).toFloat().coerceIn(0.08f, 0.65f)
+                val width = firstObj.optDouble("width", 0.56).toFloat().coerceIn(0.22f, (0.92f - left).coerceAtLeast(0.24f))
+                val height = firstObj.optDouble("height", 0.52).toFloat().coerceIn(0.22f, (0.90f - top).coerceAtLeast(0.24f))
+                val box = NormalizedRect(left, top, width, height)
 
-                if (detectedItems.isEmpty()) {
-                    throw IllegalStateException("No distinct items could be segmented in the current camera view.")
-                }
+                val itemId = "sam_${UUID.randomUUID().toString().take(8)}"
+
+                // Cut out the segmented item region as an image and save to AsyncStorage
+                val cutoutImageUri = BaggageAsyncStorage.createSamSegmentedCutoutImage(
+                    sourceBitmap = effectiveBitmap,
+                    boundingBox = box,
+                    itemName = name,
+                    itemId = itemId
+                )
+
+                val segmentedItem = BaggageItem(
+                    id = itemId,
+                    name = name,
+                    weightKg = weightKg,
+                    source = ItemSource.AI_SCANNED,
+                    category = category,
+                    confidence = conf,
+                    boundingBox = box,
+                    maskId = "SAM-CUTOUT",
+                    imageUri = cutoutImageUri
+                )
+
+                val updatedItems = listOf(segmentedItem) + _uiState.value.items
+                BaggageAsyncStorage.saveItems(updatedItems)
 
                 _uiState.update { state ->
                     state.copy(
                         isScanning = false,
                         scanProgress = 1f,
-                        scanPhaseLabel = "MUSE-SPARK-1.3 // ${detectedItems.size} SEGMENTED",
-                        items = detectedItems + manualItemsToKeep,
-                        selectedItemId = detectedItems.firstOrNull()?.id,
+                        scanPhaseLabel = "Segmented: $name",
+                        items = updatedItems,
+                        selectedItemId = segmentedItem.id,
+                        lastSegmentedItem = segmentedItem,
                         aiScanSummary = summary,
                         aiError = null,
                         scanGenerationCount = state.scanGenerationCount + 1
                     )
                 }
 
-                // Sync newly identified AI items to Firestore if signed in
+                // Sync newly segmented item to Firestore if signed in
                 if (repository != null && !currentUserId.isNullOrBlank()) {
-                    detectedItems.forEach { item ->
-                        repository.createItem(
-                            name = item.name,
-                            weightGrams = (item.weightKg * 1000.0).roundToInt().toLong(),
-                            source = ItemSource.AI_SCANNED.name,
-                            category = item.category.name,
-                            isShiftedToPersonal = false
-                        )
-                    }
+                    repository.createItem(
+                        name = segmentedItem.name,
+                        weightGrams = (segmentedItem.weightKg * 1000.0).roundToInt().toLong(),
+                        source = ItemSource.AI_SCANNED.name,
+                        category = segmentedItem.category.name,
+                        isShiftedToPersonal = false
+                    )
                 }
             } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Camera AI vision segmentation timed out", e)
+                Log.e(TAG, "Camera SAM segmentation timed out", e)
                 _uiState.update {
                     it.copy(
                         isScanning = false,
                         scanProgress = 0f,
-                        scanPhaseLabel = "MUSE-SPARK-1.3 // TIMEOUT",
-                        aiError = "AI camera scan timed out after 60 seconds. Please try again."
+                        scanPhaseLabel = "Timeout",
+                        aiError = "Camera segmentation timed out. Please try again."
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Camera AI vision segmentation failed", e)
+                Log.e(TAG, "Camera SAM segmentation failed", e)
                 _uiState.update {
                     it.copy(
                         isScanning = false,
                         scanProgress = 0f,
-                        scanPhaseLabel = "MUSE-SPARK-1.3 // SCAN ERROR",
-                        aiError = e.localizedMessage ?: "AI vision segmentation failed."
+                        scanPhaseLabel = "Scan Error",
+                        aiError = e.localizedMessage ?: "SAM segmentation failed."
                     )
                 }
             }
         }
+    }
+
+    private fun createFallbackCameraCaptureBitmap(): Bitmap {
+        val width = 640
+        val height = 640
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFF0F2F5.toInt()
+        }
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+
+        // Draw a clean travel item silhouette in the center so virtual cameras without a hardware feed still produce a valid cutout
+        val itemPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF1877F2.toInt()
+            style = android.graphics.Paint.Style.FILL
+        }
+        val itemRect = android.graphics.RectF(170f, 160f, 470f, 480f)
+        canvas.drawRoundRect(itemRect, 42f, 42f, itemPaint)
+
+        val handlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF1C1E21.toInt()
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 18f
+        }
+        canvas.drawRoundRect(android.graphics.RectF(260f, 110f, 380f, 175f), 20f, 20f, handlePaint)
+        return bitmap
     }
 
     private fun scaleBitmapForInference(source: Bitmap, maxDimension: Int): Bitmap {
@@ -857,10 +865,13 @@ class BaggageGuardViewModel(
     }
 
     fun deleteItem(itemId: String) {
+        val updated = _uiState.value.items.filterNot { it.id == itemId }
+        BaggageAsyncStorage.saveItems(updated)
         _uiState.update { state ->
             state.copy(
-                items = state.items.filterNot { it.id == itemId },
-                selectedItemId = if (state.selectedItemId == itemId) null else state.selectedItemId
+                items = updated,
+                selectedItemId = if (state.selectedItemId == itemId) null else state.selectedItemId,
+                lastSegmentedItem = if (state.lastSegmentedItem?.id == itemId) null else state.lastSegmentedItem
             )
         }
         if (repository != null && !currentUserId.isNullOrBlank()) {
@@ -872,18 +883,21 @@ class BaggageGuardViewModel(
 
     fun adjustItemWeight(itemId: String, deltaKg: Double) {
         var updatedItem: BaggageItem? = null
+        val nextList = _uiState.value.items.map { item ->
+            if (item.id == itemId) {
+                val updated = ((item.weightKg + deltaKg) * 100.0).roundToInt() / 100.0
+                val copy = item.copy(weightKg = updated.coerceIn(0.05, 35.0))
+                updatedItem = copy
+                copy
+            } else {
+                item
+            }
+        }
+        BaggageAsyncStorage.saveItems(nextList)
         _uiState.update { state ->
             state.copy(
-                items = state.items.map { item ->
-                    if (item.id == itemId) {
-                        val updated = ((item.weightKg + deltaKg) * 100.0).roundToInt() / 100.0
-                        val copy = item.copy(weightKg = updated.coerceIn(0.05, 35.0))
-                        updatedItem = copy
-                        copy
-                    } else {
-                        item
-                    }
-                }
+                items = nextList,
+                lastSegmentedItem = if (state.lastSegmentedItem?.id == itemId) updatedItem else state.lastSegmentedItem
             )
         }
         val target = updatedItem
@@ -900,18 +914,18 @@ class BaggageGuardViewModel(
 
     fun toggleShiftToPersonal(itemId: String) {
         var updatedItem: BaggageItem? = null
+        val nextList = _uiState.value.items.map { item ->
+            if (item.id == itemId) {
+                val copy = item.copy(isShiftedToPersonal = !item.isShiftedToPersonal)
+                updatedItem = copy
+                copy
+            } else {
+                item
+            }
+        }
+        BaggageAsyncStorage.saveItems(nextList)
         _uiState.update { state ->
-            state.copy(
-                items = state.items.map { item ->
-                    if (item.id == itemId) {
-                        val copy = item.copy(isShiftedToPersonal = !item.isShiftedToPersonal)
-                        updatedItem = copy
-                        copy
-                    } else {
-                        item
-                    }
-                }
-            )
+            state.copy(items = nextList)
         }
         val target = updatedItem
         if (target != null && repository != null && !currentUserId.isNullOrBlank()) {
@@ -926,27 +940,24 @@ class BaggageGuardViewModel(
     }
 
     fun applyEscortRecommendedShift() {
-        _uiState.update { state ->
-            val targetIds = state.escortAdvisory.recommendedShiftIds.toSet()
-            if (targetIds.isEmpty()) return@update state
-            state.copy(
-                items = state.items.map { item ->
-                    if (item.id in targetIds) {
-                        item.copy(isShiftedToPersonal = true)
-                    } else {
-                        item
-                    }
-                }
-            )
+        val state = _uiState.value
+        val targetIds = state.escortAdvisory.recommendedShiftIds.toSet()
+        if (targetIds.isEmpty()) return
+        val nextList = state.items.map { item ->
+            if (item.id in targetIds) {
+                item.copy(isShiftedToPersonal = true)
+            } else {
+                item
+            }
         }
+        BaggageAsyncStorage.saveItems(nextList)
+        _uiState.update { it.copy(items = nextList) }
     }
 
     fun restoreAllShiftedItems() {
-        _uiState.update { state ->
-            state.copy(
-                items = state.items.map { it.copy(isShiftedToPersonal = false) }
-            )
-        }
+        val nextList = _uiState.value.items.map { it.copy(isShiftedToPersonal = false) }
+        BaggageAsyncStorage.saveItems(nextList)
+        _uiState.update { it.copy(items = nextList) }
     }
 
     fun updateManualNameInput(value: String) {
@@ -981,7 +992,7 @@ class BaggageGuardViewModel(
         val parsedWeight = current.manualWeightInput.trim().toDoubleOrNull()
 
         if (trimmedName.isEmpty()) {
-            _uiState.update { it.copy(manualInputError = "Enter an item name (e.g., Packed Boots)") }
+            _uiState.update { it.copy(manualInputError = "Enter an item name") }
             return
         }
         if (parsedWeight == null || parsedWeight <= 0.0 || parsedWeight > 50.0) {
@@ -999,9 +1010,12 @@ class BaggageGuardViewModel(
             boundingBox = null
         )
 
+        val nextList = current.items + newItem
+        BaggageAsyncStorage.saveItems(nextList)
+
         _uiState.update { state ->
             state.copy(
-                items = state.items + newItem,
+                items = nextList,
                 manualNameInput = "",
                 manualWeightInput = "",
                 manualInputError = null,
@@ -1215,171 +1229,6 @@ class BaggageGuardViewModel(
     }
 
     companion object {
-        fun buildRigItems(rig: GearRigPreset): List<BaggageItem> {
-            return when (rig) {
-                GearRigPreset.NOMAD_CABIN -> listOf(
-                    BaggageItem(
-                        id = "ai_mbp16",
-                        name = "MacBook Pro 16\" M3 Max",
-                        weightKg = 2.15,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.COMPUTE,
-                        confidence = 0.994f,
-                        boundingBox = NormalizedRect(0.06f, 0.12f, 0.40f, 0.42f),
-                        maskId = "SEG-01"
-                    ),
-                    BaggageItem(
-                        id = "ai_sony_a7",
-                        name = "Sony A7IV + 24-70mm GM",
-                        weightKg = 1.35,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.COMPUTE,
-                        confidence = 0.988f,
-                        boundingBox = NormalizedRect(0.54f, 0.10f, 0.38f, 0.36f),
-                        maskId = "SEG-02"
-                    ),
-                    BaggageItem(
-                        id = "ai_anker_27k",
-                        name = "Anker Prime 27,650mAh Bank",
-                        weightKg = 0.65,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.POWER,
-                        confidence = 0.991f,
-                        boundingBox = NormalizedRect(0.08f, 0.60f, 0.26f, 0.28f),
-                        maskId = "SEG-03"
-                    ),
-                    BaggageItem(
-                        id = "ai_anc_headphones",
-                        name = "Carbon ANC Studio Case",
-                        weightKg = 0.45,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.ACCESSORY,
-                        confidence = 0.976f,
-                        boundingBox = NormalizedRect(0.39f, 0.54f, 0.26f, 0.34f),
-                        maskId = "SEG-04"
-                    ),
-                    BaggageItem(
-                        id = "ai_dopp_kit",
-                        name = "Aero TSA Liquids Pouch",
-                        weightKg = 0.80,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.LIQUIDS,
-                        confidence = 0.969f,
-                        boundingBox = NormalizedRect(0.69f, 0.54f, 0.24f, 0.34f),
-                        maskId = "SEG-05"
-                    ),
-                    BaggageItem(
-                        id = "man_chelsea_boots",
-                        name = "Packed Weatherproof Boots",
-                        weightKg = 1.40,
-                        source = ItemSource.MANUAL_ENTRY,
-                        category = GearCategory.APPAREL
-                    )
-                )
-
-                GearRigPreset.EXPEDITION_HOLD -> listOf(
-                    BaggageItem(
-                        id = "exp_pelican_drone",
-                        name = "Mavic 3 Cine + 4x LiPo Case",
-                        weightKg = 4.20,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.COMPUTE,
-                        confidence = 0.995f,
-                        boundingBox = NormalizedRect(0.05f, 0.10f, 0.44f, 0.44f),
-                        maskId = "SEG-01"
-                    ),
-                    BaggageItem(
-                        id = "exp_tripod_carbon",
-                        name = "Carbon Travel Tripod + Gimbal",
-                        weightKg = 3.10,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.ACCESSORY,
-                        confidence = 0.984f,
-                        boundingBox = NormalizedRect(0.53f, 0.12f, 0.40f, 0.36f),
-                        maskId = "SEG-02"
-                    ),
-                    BaggageItem(
-                        id = "exp_goretex_shell",
-                        name = "Compression Cube: Alpine Shell",
-                        weightKg = 4.85,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.APPAREL,
-                        confidence = 0.979f,
-                        boundingBox = NormalizedRect(0.07f, 0.58f, 0.34f, 0.32f),
-                        maskId = "SEG-03"
-                    ),
-                    BaggageItem(
-                        id = "exp_power_station",
-                        name = "GaN 300W Field Power Hub",
-                        weightKg = 2.65,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.POWER,
-                        confidence = 0.992f,
-                        boundingBox = NormalizedRect(0.45f, 0.54f, 0.24f, 0.34f),
-                        maskId = "SEG-04"
-                    ),
-                    BaggageItem(
-                        id = "exp_med_liquids",
-                        name = "Expedition Hydration & Med Kit",
-                        weightKg = 2.40,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.LIQUIDS,
-                        confidence = 0.971f,
-                        boundingBox = NormalizedRect(0.72f, 0.54f, 0.22f, 0.35f),
-                        maskId = "SEG-05"
-                    ),
-                    BaggageItem(
-                        id = "man_mountaineering_boots",
-                        name = "Crampon-Ready Alpine Boots",
-                        weightKg = 3.40,
-                        source = ItemSource.MANUAL_ENTRY,
-                        category = GearCategory.APPAREL
-                    )
-                )
-
-                GearRigPreset.EXEC_OVERNIGHT -> listOf(
-                    BaggageItem(
-                        id = "exec_x1_nano",
-                        name = "ThinkPad X1 Carbon Gen 12",
-                        weightKg = 1.12,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.COMPUTE,
-                        confidence = 0.996f,
-                        boundingBox = NormalizedRect(0.08f, 0.14f, 0.42f, 0.40f),
-                        maskId = "SEG-01"
-                    ),
-                    BaggageItem(
-                        id = "exec_garment_folder",
-                        name = "Ballistic Garment Folder",
-                        weightKg = 1.85,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.APPAREL,
-                        confidence = 0.985f,
-                        boundingBox = NormalizedRect(0.54f, 0.14f, 0.38f, 0.42f),
-                        maskId = "SEG-02"
-                    ),
-                    BaggageItem(
-                        id = "exec_gan_charger",
-                        name = "140W GaN Charger + MagBank",
-                        weightKg = 0.58,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.POWER,
-                        confidence = 0.989f,
-                        boundingBox = NormalizedRect(0.12f, 0.60f, 0.32f, 0.28f),
-                        maskId = "SEG-03"
-                    ),
-                    BaggageItem(
-                        id = "exec_leather_folio",
-                        name = "Passport & Fragrance Kit",
-                        weightKg = 0.65,
-                        source = ItemSource.AI_SCANNED,
-                        category = GearCategory.LIQUIDS,
-                        confidence = 0.974f,
-                        boundingBox = NormalizedRect(0.52f, 0.60f, 0.36f, 0.28f),
-                        maskId = "SEG-04"
-                    )
-                )
-            }
-        }
+        fun buildRigItems(rig: GearRigPreset): List<BaggageItem> = emptyList()
     }
 }
