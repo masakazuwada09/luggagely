@@ -1,6 +1,6 @@
 {
-  "name": "Baggage Guard",
-  "description": "Escort AI: Baggage Guard — a smart travel baggage weight optimizer and real-time vision-segmentation assistant for global travelers and nomads.",
+  "name": "Luggagely",
+  "description": "Luggagely — a smart travel baggage weight optimizer and real-time vision-segmentation assistant powered by Muse Spark 1.3 and Meta SAM.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

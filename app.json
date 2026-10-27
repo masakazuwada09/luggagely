@@ -1,32 +1,32 @@
 {
   "expo": {
-    "name": "Baggage Guard",
-    "slug": "baggage-guard",
+    "name": "Luggagely",
+    "slug": "luggagely",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./public/assets/aistudio/luggageicon_558fc4e6.png",
+    "icon": "./public/assets/aistudio/icon_27d1943b.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./public/assets/aistudio/luggageicon_558fc4e6.png",
+      "image": "./public/assets/aistudio/icon_27d1943b.png",
       "resizeMode": "contain",
-      "backgroundColor": "#FFFFFF"
+      "backgroundColor": "#0D2643"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.aistudio.baggageguard.xkzpmq",
       "buildNumber": "1",
-      "icon": "./public/assets/aistudio/luggageicon_558fc4e6.png",
+      "icon": "./public/assets/aistudio/icon_27d1943b.png",
       "infoPlist": {
-        "NSCameraUsageDescription": "Baggage Guard requires camera access to run real-time Meta SAM segmentation and Muse Spark 1.3 weight detection on your luggage items.",
+        "NSCameraUsageDescription": "Luggagely requires camera access to run real-time Meta SAM segmentation and Muse Spark 1.3 weight detection on your luggage items.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.aistudio.baggageguard.xkzpmq",
       "adaptiveIcon": {
-        "foregroundImage": "./public/assets/aistudio/luggageicon_558fc4e6.png",
-        "backgroundColor": "#FFFFFF"
+        "foregroundImage": "./public/assets/aistudio/icon_27d1943b.png",
+        "backgroundColor": "#0D2643"
       },
       "permissions": [
         "android.permission.CAMERA"

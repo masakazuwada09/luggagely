@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Baggage Guard</string>
+    <string name="app_name">Luggagely</string>
     <string name="brand_subtitle">ESCORT AI // VISION-SEGMENTATION &amp; MASS OPTIMIZER</string>
     <string name="ai_segmentation_active">AI Segmentation Active</string>
     <string name="ai_scanning_in_progress">muse-spark-1.3 + Meta SAM Scan…</string>

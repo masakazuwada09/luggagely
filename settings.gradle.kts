@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Baggage Guard"
+rootProject.name = "Luggagely"
 
 include(":app")
